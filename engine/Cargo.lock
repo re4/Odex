@@ -1495,6 +1495,16 @@ dependencies = [
 [[package]]
 name = "odex-hooks"
 version = "0.1.0"
+dependencies = [
+ "hex",
+ "odex-protocol",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "odex-llm"
