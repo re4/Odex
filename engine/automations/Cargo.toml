@@ -5,3 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+odex-protocol.workspace = true
+chrono.workspace = true
+croner.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
