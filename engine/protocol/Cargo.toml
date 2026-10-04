@@ -1,0 +1,11 @@
+[package]
+name = "odex-protocol"
+description = "Odex engine <-> UI protocol (JSON-RPC 2.0, app-server v1). Single source of truth; TypeScript is generated from here."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ts-rs.workspace = true

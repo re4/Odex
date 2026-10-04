@@ -1,0 +1,23 @@
+# Rust
+/engine/target/
+/engine/target-*/
+**/*.rs.bk
+
+# Node / desktop
+node_modules/
+/desktop/dist/
+/desktop/out/
+/desktop/release/
+/desktop/test-results/
+/desktop/playwright-report/
+*.tsbuildinfo
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# local runtime
+.odex-dev-home/
+*.log

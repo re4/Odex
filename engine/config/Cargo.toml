@@ -1,0 +1,21 @@
+[package]
+name = "odex-config"
+description = "Config loading, layering, editing and model presets for Odex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+odex-protocol.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+dirs.workspace = true
+wildmatch.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true
