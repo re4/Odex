@@ -5,3 +5,14 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+odex-protocol.workspace = true
+ignore.workspace = true
+globset.workspace = true
+grep-searcher.workspace = true
+grep-regex.workspace = true
+grep-matcher.workspace = true
+encoding_rs.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
