@@ -1,7 +1,15 @@
 [package]
 name = "odex-apply-patch"
+description = "Parser and applier for the Odex agent's apply_patch file-edit format."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+serde.workspace = true
+similar.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile.workspace = true
