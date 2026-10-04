@@ -1,7 +1,24 @@
 [package]
 name = "odex-mock-vllm"
+description = "Mock vLLM OpenAI-compatible server for Odex tests (SSE fixtures, faults, max_model_len enforcement)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "odex-mock-vllm"
+path = "src/main.rs"
+
 [dependencies]
+anyhow.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+regex.workspace = true
+uuid.workspace = true
+bytes.workspace = true
+tokio-stream.workspace = true
+clap.workspace = true
+tracing.workspace = true

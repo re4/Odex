@@ -123,7 +123,18 @@ mod tests {
         assert!(p.all().len() >= 10);
         assert_eq!(p.match_model("Qwen/Qwen3-Coder-30B-A3B-Instruct").unwrap().id, "qwen3-coder");
         assert_eq!(p.match_model("openai/gpt-oss-120b").unwrap().id, "gpt-oss");
-        assert_eq!(p.match_model("zai-org/GLM-4.5-Air").unwrap().id, "glm-4");
+        assert_eq!(p.match_model("zai-org/GLM-4.5-Air").unwrap().id, "glm-4_5");
+        assert_eq!(p.match_model("zai-org/GLM-4.7-FP8").unwrap().id, "glm-4_7");
+        assert_eq!(p.match_model("zai-org/GLM-4.5V").unwrap().id, "glm-4v");
+        assert_eq!(p.match_model("Qwen/Qwen3-30B-A3B-Instruct-2507").unwrap().id, "qwen3-instruct");
+        assert_eq!(p.match_model("Qwen/Qwen3-30B-A3B-Thinking-2507").unwrap().id, "qwen3-thinking");
+        assert_eq!(p.match_model("Qwen/Qwen3-32B-AWQ").unwrap().id, "qwen3-hybrid");
+        assert_eq!(p.match_model("Qwen/Qwen3.6-35B-A3B").unwrap().id, "qwen3_5");
+        assert_eq!(p.match_model("Qwen/Qwen3-Coder-Next").unwrap().id, "qwen3-coder-next");
+        assert_eq!(p.match_model("moonshotai/Kimi-K2-Thinking").unwrap().id, "kimi-k2-thinking");
+        assert_eq!(p.match_model("moonshotai/Kimi-K2-Instruct-0905").unwrap().id, "kimi-k2");
+        assert_eq!(p.match_model("deepseek-ai/DeepSeek-V3.2").unwrap().id, "deepseek-v3_2");
+        assert_eq!(p.match_model("deepseek-ai/DeepSeek-V3.1-Terminus").unwrap().id, "deepseek-v3_1");
         assert_eq!(p.match_model("mistralai/Devstral-Small-2507").unwrap().id, "devstral");
         assert_eq!(p.match_model("Qwen/Qwen3-VL-8B-Instruct").unwrap().id, "qwen3-vl");
         assert!(p.match_model("totally-unknown").is_none());
@@ -131,13 +142,17 @@ mod tests {
         // every preset has serve flags with prefix caching
         for preset in p.all() {
             assert!(preset.serve_command.contains("--enable-prefix-caching"), "{}", preset.id);
+            // non-thinking presets must not set a reasoning parser
+            if !preset.settings.capabilities.and_then(|c| c.reasoning).unwrap_or(false) {
+                assert!(!preset.serve_command.contains("--reasoning-parser"), "{}", preset.id);
+            }
         }
     }
 
     #[test]
     fn effort_maps_present() {
         let p = Presets::builtin();
-        let q = p.get("qwen3-thinking").unwrap();
+        let q = p.get("qwen3-hybrid").unwrap();
         assert!(q.settings.reasoning_effort_map.contains_key("none"));
     }
 }

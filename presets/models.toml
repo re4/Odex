@@ -1,19 +1,39 @@
 # Odex model presets for self-hosted models served by vLLM.
 #
 # Each preset carries known-good per-model settings plus the `vllm serve`
-# flags it needs. A configured or discovered model inherits the first preset
+# flags it needs. A configured or discovered model inherits the FIRST preset
 # whose `match` glob matches its served model id (case-insensitive), unless
-# `[models.<key>] preset = "..."` picks one explicitly.
+# `[models.<key>] preset = "..."` picks one explicitly. Order matters: more
+# specific presets come first.
 #
-# Parser names were checked against the vLLM docs/source; see
-# docs/research/vllm-flags.md and docs/vllm-setup.md.
+# Parser names were verified against vLLM v0.30.0 (2026-09) and the vLLM
+# recipes; see docs/research/vllm-flags.md and docs/vllm-setup.md.
+# Rules of thumb:
+#   * never set --reasoning-parser on non-thinking models (output would land in `reasoning`)
+#   * sampling is sent explicitly per request (vLLM never takes presence_penalty from the model)
+
+[presets.qwen3-coder-next]
+display_name = "Qwen3-Coder-Next"
+family = "qwen3-coder"
+match = ["*qwen3-coder-next*"]
+serve = "vllm serve Qwen/Qwen3-Coder-Next --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 131072 --enable-prefix-caching"
+notes = "Non-thinking. Needs vLLM >= 0.15."
+[presets.qwen3-coder-next.settings]
+temperature = 1.0
+top_p = 0.95
+top_k = 40
+max_output_tokens = 16384
+tool_profile = "extended"
+reasoning_history = "drop"
+tool_call_format = "qwen3_coder"
+capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = false }
 
 [presets.qwen3-coder]
 display_name = "Qwen3-Coder"
 family = "qwen3-coder"
 match = ["*qwen3-coder*"]
 serve = "vllm serve Qwen/Qwen3-Coder-30B-A3B-Instruct --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 131072 --enable-prefix-caching"
-notes = "Non-thinking agentic coder. 256k native context; 128k is a good default on 2x24GB."
+notes = "Non-thinking agentic coder (do not set a reasoning parser). 256k native context; drop --max-model-len to 32768 if memory is tight."
 [presets.qwen3-coder.settings]
 temperature = 0.7
 top_p = 0.8
@@ -29,12 +49,14 @@ capabilities = { tools = true, vision = false, parallel_tools = true, reasoning 
 display_name = "Qwen3-VL"
 family = "qwen3-vl"
 match = ["*qwen3-vl*", "*qwen2.5-vl*"]
-serve = "vllm serve Qwen/Qwen3-VL-30B-A3B-Instruct --enable-auto-tool-choice --tool-call-parser hermes --max-model-len 65536 --limit-mm-per-prompt.image 4 --enable-prefix-caching"
-notes = "Vision role. Grounds UI elements in normalized 0-1000 coordinates."
+serve = "vllm serve Qwen/Qwen3-VL-30B-A3B-Instruct --enable-auto-tool-choice --tool-call-parser hermes --max-model-len 128000 --limit-mm-per-prompt.video 0 --enable-prefix-caching"
+notes = "Vision role. Grounds UI elements in normalized 0-1000 coordinates. Thinking variants add --reasoning-parser qwen3 (vLLM >= 0.17) or deepseek_r1."
 [presets.qwen3-vl.settings]
 temperature = 0.7
 top_p = 0.8
 top_k = 20
+repetition_penalty = 1.0
+presence_penalty = 1.5
 max_output_tokens = 8192
 tool_profile = "extended"
 coordinate_space = "normalized_1000"
@@ -42,12 +64,39 @@ max_image_px = 1600
 tool_call_format = "hermes"
 capabilities = { tools = true, vision = true, parallel_tools = true, reasoning = false }
 
-[presets.qwen3-thinking]
-display_name = "Qwen3 (thinking)"
+[presets.qwen3_5]
+display_name = "Qwen3.5 / 3.6"
 family = "qwen3"
-match = ["*qwen3-*thinking*", "*qwen3-next*thinking*", "qwen/qwen3-32b*", "qwen/qwen3-14b*", "qwen/qwen3-8b*", "qwen/qwen3-30b-a3b", "qwen/qwen3-235b-a22b", "*qwen3.5*"]
-serve = "vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --max-model-len 131072 --enable-prefix-caching"
-notes = "Hybrid/thinking Qwen3. Thinking can be disabled per request with chat_template_kwargs.enable_thinking=false."
+match = ["*qwen3.5*", "*qwen3.6*", "*qwen3.8*"]
+serve = "vllm serve Qwen/Qwen3.6-35B-A3B --trust-remote-code --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3 --max-model-len 131072 --enable-prefix-caching"
+notes = "Thinks by default; needs vLLM >= 0.17. Add --language-model-only to skip the vision encoder. Sampling below is the vendor's 'precise coding' profile."
+[presets.qwen3_5.settings]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+presence_penalty = 0.0
+repetition_penalty = 1.0
+max_output_tokens = 32768
+tool_profile = "extended"
+reasoning_history = "current_turn"
+tool_call_format = "qwen3_coder"
+default_reasoning_effort = "medium"
+capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
+[presets.qwen3_5.settings.reasoning_effort_map]
+none = { chat_template_kwargs = { enable_thinking = false } }
+minimal = { chat_template_kwargs = { enable_thinking = false } }
+low = { chat_template_kwargs = { enable_thinking = true } }
+medium = { chat_template_kwargs = { enable_thinking = true } }
+high = { chat_template_kwargs = { enable_thinking = true } }
+xhigh = { chat_template_kwargs = { enable_thinking = true } }
+
+[presets.qwen3-thinking]
+display_name = "Qwen3 Thinking (2507 / Next)"
+family = "qwen3"
+match = ["*qwen3-*thinking*"]
+serve = "vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser deepseek_r1 --max-model-len 131072 --enable-prefix-caching"
+notes = "Thinking-only. On vLLM >= 0.17 --reasoning-parser qwen3 also works; older qwen3 parser leaves the thought in content."
 [presets.qwen3-thinking.settings]
 temperature = 0.6
 top_p = 0.95
@@ -57,20 +106,14 @@ max_output_tokens = 32768
 tool_profile = "extended"
 reasoning_history = "current_turn"
 tool_call_format = "hermes"
-default_reasoning_effort = "medium"
 capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
-[presets.qwen3-thinking.settings.reasoning_effort_map]
-none = { chat_template_kwargs = { enable_thinking = false } }
-minimal = { chat_template_kwargs = { enable_thinking = false } }
-low = { chat_template_kwargs = { enable_thinking = true } }
-medium = { chat_template_kwargs = { enable_thinking = true } }
-high = { chat_template_kwargs = { enable_thinking = true } }
 
 [presets.qwen3-instruct]
-display_name = "Qwen3 Instruct (2507)"
+display_name = "Qwen3 Instruct (2507 / Next)"
 family = "qwen3"
-match = ["*qwen3-*instruct*", "*qwen3-next*instruct*"]
+match = ["*qwen3-*instruct*"]
 serve = "vllm serve Qwen/Qwen3-30B-A3B-Instruct-2507 --enable-auto-tool-choice --tool-call-parser hermes --max-model-len 131072 --enable-prefix-caching"
+notes = "Non-thinking only: do not set a reasoning parser."
 [presets.qwen3-instruct.settings]
 temperature = 0.7
 top_p = 0.8
@@ -82,27 +125,57 @@ reasoning_history = "drop"
 tool_call_format = "hermes"
 capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = false }
 
+[presets.qwen3-hybrid]
+display_name = "Qwen3 (hybrid thinking)"
+family = "qwen3"
+match = ["*qwen3-0.6b*", "*qwen3-1.7b*", "*qwen3-4b*", "*qwen3-8b*", "*qwen3-14b*", "*qwen3-32b*", "*qwen3-30b-a3b*", "*qwen3-235b-a22b*"]
+serve = "vllm serve Qwen/Qwen3-32B --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --max-model-len 32768 --enable-prefix-caching"
+notes = "32k native; for 128k add --hf-overrides '{\"max_position_embeddings\":131072,\"rope_parameters\":{\"rope_type\":\"yarn\",\"factor\":4.0,\"original_max_position_embeddings\":32768}}' --max-model-len 131072."
+[presets.qwen3-hybrid.settings]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+max_output_tokens = 16384
+tool_profile = "extended"
+reasoning_history = "current_turn"
+tool_call_format = "hermes"
+default_reasoning_effort = "medium"
+capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
+[presets.qwen3-hybrid.settings.reasoning_effort_map]
+none = { chat_template_kwargs = { enable_thinking = false }, temperature = 0.7, top_p = 0.8 }
+minimal = { chat_template_kwargs = { enable_thinking = false }, temperature = 0.7, top_p = 0.8 }
+low = { chat_template_kwargs = { enable_thinking = true } }
+medium = { chat_template_kwargs = { enable_thinking = true } }
+high = { chat_template_kwargs = { enable_thinking = true } }
+
 [presets.glm-4v]
 display_name = "GLM-4.5V"
 family = "glm"
 match = ["*glm-4.5v*", "*glm-4.1v*", "*glm-4.6v*"]
-serve = "vllm serve zai-org/GLM-4.5V --enable-auto-tool-choice --tool-call-parser glm45 --reasoning-parser glm45 --max-model-len 65536 --enable-prefix-caching"
+serve = "vllm serve zai-org/GLM-4.5V --trust-remote-code --enable-auto-tool-choice --tool-call-parser glm45 --reasoning-parser glm45 --max-model-len 65536 --mm-encoder-tp-mode data --enable-prefix-caching"
+notes = "Its generation_config.json is near-greedy (top_k 1); Odex always sends explicit sampling."
 [presets.glm-4v.settings]
 temperature = 0.6
 top_p = 0.95
+top_k = 40
 max_output_tokens = 8192
 coordinate_space = "normalized_1000"
 tool_call_format = "glm45"
+reasoning_history = "drop"
 capabilities = { tools = true, vision = true, parallel_tools = false, reasoning = true }
+[presets.glm-4v.settings.reasoning_effort_map]
+none = { chat_template_kwargs = { enable_thinking = false } }
+minimal = { chat_template_kwargs = { enable_thinking = false } }
 
-[presets.glm-4]
-display_name = "GLM-4.5 / 4.6 / 4.7"
+[presets.glm-4_7]
+display_name = "GLM-4.7 / GLM-5"
 family = "glm"
-match = ["*glm-4.5*", "*glm-4.6*", "*glm-4.7*", "*glm-5*"]
-serve = "vllm serve zai-org/GLM-4.5-Air --enable-auto-tool-choice --tool-call-parser glm45 --reasoning-parser glm45 --max-model-len 131072 --enable-prefix-caching"
-notes = "Hybrid reasoning. Disable thinking with chat_template_kwargs.enable_thinking=false. GLM-4.7 uses the glm47 tool parser on recent vLLM."
-[presets.glm-4.settings]
-temperature = 0.6
+match = ["*glm-4.7*", "*glm-5*"]
+serve = "vllm serve zai-org/GLM-4.7-FP8 --trust-remote-code --enable-auto-tool-choice --tool-call-parser glm47 --reasoning-parser glm45 --max-model-len 131072 --enable-prefix-caching"
+notes = "glm47 tool parser needs vLLM >= 0.14 (GLM-5: --reasoning-parser glm47, vLLM >= 0.24). Thinking on by default."
+[presets.glm-4_7.settings]
+temperature = 1.0
 top_p = 0.95
 max_output_tokens = 16384
 tool_profile = "extended"
@@ -110,7 +183,30 @@ reasoning_history = "current_turn"
 tool_call_format = "glm45"
 default_reasoning_effort = "medium"
 capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
-[presets.glm-4.settings.reasoning_effort_map]
+[presets.glm-4_7.settings.reasoning_effort_map]
+none = { chat_template_kwargs = { enable_thinking = false } }
+minimal = { chat_template_kwargs = { enable_thinking = false } }
+low = { chat_template_kwargs = { enable_thinking = true } }
+medium = { chat_template_kwargs = { enable_thinking = true } }
+high = { chat_template_kwargs = { enable_thinking = true } }
+
+[presets.glm-4_5]
+display_name = "GLM-4.5 / 4.6"
+family = "glm"
+match = ["*glm-4.5*", "*glm-4.6*"]
+serve = "vllm serve zai-org/GLM-4.5-Air --trust-remote-code --enable-auto-tool-choice --tool-call-parser glm45 --reasoning-parser glm45 --max-model-len 131072 --enable-prefix-caching"
+notes = "Hybrid reasoning; disable with chat_template_kwargs.enable_thinking=false. Parsers need vLLM >= 0.10.1."
+[presets.glm-4_5.settings]
+temperature = 1.0
+top_p = 0.95
+top_k = 40
+max_output_tokens = 16384
+tool_profile = "extended"
+reasoning_history = "current_turn"
+tool_call_format = "glm45"
+default_reasoning_effort = "medium"
+capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
+[presets.glm-4_5.settings.reasoning_effort_map]
 none = { chat_template_kwargs = { enable_thinking = false } }
 minimal = { chat_template_kwargs = { enable_thinking = false } }
 low = { chat_template_kwargs = { enable_thinking = true } }
@@ -122,7 +218,7 @@ display_name = "gpt-oss"
 family = "gpt-oss"
 match = ["*gpt-oss*"]
 serve = "vllm serve openai/gpt-oss-20b --enable-auto-tool-choice --tool-call-parser openai --reasoning-parser openai_gptoss --max-model-len 131072 --enable-prefix-caching"
-notes = "Harmony format. Reasoning effort maps to the `reasoning_effort` request field."
+notes = "Harmony format (no chat template needed). Always set both parsers. Effort maps to the `reasoning_effort` request field."
 [presets.gpt-oss.settings]
 temperature = 1.0
 top_p = 1.0
@@ -132,17 +228,64 @@ reasoning_history = "current_turn"
 default_reasoning_effort = "medium"
 capabilities = { tools = true, vision = false, parallel_tools = false, reasoning = true }
 [presets.gpt-oss.settings.reasoning_effort_map]
+minimal = { reasoning_effort = "low" }
 low = { reasoning_effort = "low" }
 medium = { reasoning_effort = "medium" }
 high = { reasoning_effort = "high" }
+xhigh = { reasoning_effort = "high" }
 
-[presets.deepseek-v3]
-display_name = "DeepSeek-V3.1 / V3.2"
+[presets.deepseek-v4]
+display_name = "DeepSeek-V4"
 family = "deepseek"
-match = ["*deepseek-v3.1*", "*deepseek-v3.2*", "*deepseek-v3*"]
-serve = "vllm serve deepseek-ai/DeepSeek-V3.1 --enable-auto-tool-choice --tool-call-parser deepseek_v31 --reasoning-parser deepseek_v3 --max-model-len 131072 --enable-prefix-caching"
-notes = "Thinking is toggled with chat_template_kwargs.thinking."
-[presets.deepseek-v3.settings]
+match = ["*deepseek-v4*"]
+serve = "vllm serve deepseek-ai/DeepSeek-V4-Flash --trust-remote-code --tokenizer-mode deepseek_v4 --enable-auto-tool-choice --tool-call-parser deepseek_v4 --reasoning-parser deepseek_v4 --kv-cache-dtype fp8 --block-size 256 --max-model-len 131072 --enable-prefix-caching"
+notes = "Needs vLLM >= 0.20."
+[presets.deepseek-v4.settings]
+temperature = 1.0
+top_p = 0.95
+max_output_tokens = 16384
+tool_profile = "extended"
+reasoning_history = "current_turn"
+tool_call_format = "deepseek"
+default_reasoning_effort = "medium"
+capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
+[presets.deepseek-v4.settings.reasoning_effort_map]
+none = { chat_template_kwargs = { thinking = false } }
+minimal = { chat_template_kwargs = { thinking = false } }
+low = { chat_template_kwargs = { thinking = true } }
+medium = { chat_template_kwargs = { thinking = true } }
+high = { chat_template_kwargs = { thinking = true, reasoning_effort = "high" } }
+xhigh = { chat_template_kwargs = { thinking = true, reasoning_effort = "max" } }
+
+[presets.deepseek-v3_2]
+display_name = "DeepSeek-V3.2"
+family = "deepseek"
+match = ["*deepseek-v3.2*"]
+serve = "vllm serve deepseek-ai/DeepSeek-V3.2 --trust-remote-code --tokenizer-mode deepseek_v32 --enable-auto-tool-choice --tool-call-parser deepseek_v32 --reasoning-parser deepseek_v3 --max-model-len 131072 --enable-prefix-caching"
+notes = "Thinking off by default; tool calls work in both modes."
+[presets.deepseek-v3_2.settings]
+temperature = 1.0
+top_p = 0.95
+max_output_tokens = 16384
+tool_profile = "extended"
+reasoning_history = "drop"
+tool_call_format = "deepseek"
+default_reasoning_effort = "none"
+capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
+[presets.deepseek-v3_2.settings.reasoning_effort_map]
+none = { chat_template_kwargs = { thinking = false } }
+minimal = { chat_template_kwargs = { thinking = false } }
+low = { chat_template_kwargs = { thinking = true } }
+medium = { chat_template_kwargs = { thinking = true } }
+high = { chat_template_kwargs = { thinking = true } }
+
+[presets.deepseek-v3_1]
+display_name = "DeepSeek-V3.1"
+family = "deepseek"
+match = ["*deepseek-v3.1*", "*deepseek-v3*"]
+serve = "vllm serve deepseek-ai/DeepSeek-V3.1-Terminus --trust-remote-code --enable-auto-tool-choice --tool-call-parser deepseek_v31 --reasoning-parser deepseek_v3 --chat-template examples/tool_chat_template_deepseekv31.jinja --max-model-len 131072 --enable-prefix-caching"
+notes = "Tool calling only works in non-thinking mode, so the default effort is `none`. The chat template ships in the vLLM Docker image (examples/)."
+[presets.deepseek-v3_1.settings]
 temperature = 0.6
 top_p = 0.95
 max_output_tokens = 16384
@@ -151,7 +294,7 @@ reasoning_history = "drop"
 tool_call_format = "deepseek"
 default_reasoning_effort = "none"
 capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
-[presets.deepseek-v3.settings.reasoning_effort_map]
+[presets.deepseek-v3_1.settings.reasoning_effort_map]
 none = { chat_template_kwargs = { thinking = false } }
 minimal = { chat_template_kwargs = { thinking = false } }
 low = { chat_template_kwargs = { thinking = true } }
@@ -161,8 +304,9 @@ high = { chat_template_kwargs = { thinking = true } }
 [presets.devstral]
 display_name = "Devstral / Mistral"
 family = "mistral"
-match = ["*devstral*", "*mistral-small*", "*magistral*", "*codestral*", "*mistral-large*", "*ministral*"]
+match = ["*devstral*", "*mistral-small*", "*magistral*", "*codestral*", "*mistral-large*", "*ministral*", "*mistral-medium*"]
 serve = "vllm serve mistralai/Devstral-Small-2507 --tokenizer-mode mistral --config-format mistral --load-format mistral --enable-auto-tool-choice --tool-call-parser mistral --max-model-len 131072 --enable-prefix-caching"
+notes = "Devstral 2 auto-detects the Mistral format (mistral_common >= 1.8.6). Reasoning variants (Magistral, Mistral-Small-4) add --reasoning-parser mistral."
 [presets.devstral.settings]
 temperature = 0.15
 top_p = 1.0
@@ -172,17 +316,32 @@ reasoning_history = "drop"
 tool_call_format = "mistral"
 capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = false }
 
+[presets.kimi-k2-thinking]
+display_name = "Kimi-K2 Thinking / K2.5+"
+family = "kimi"
+match = ["*kimi-k2-thinking*", "*kimi-k2.5*", "*kimi-k2.6*", "*kimi-k2.7*"]
+serve = "vllm serve moonshotai/Kimi-K2-Thinking --trust-remote-code --enable-auto-tool-choice --tool-call-parser kimi_k2 --reasoning-parser kimi_k2 --max-model-len 131072 --enable-prefix-caching"
+notes = "Interleaved thinking: reasoning is sent back in history every turn."
+[presets.kimi-k2-thinking.settings]
+temperature = 1.0
+top_p = 0.95
+max_output_tokens = 16384
+tool_profile = "extended"
+reasoning_history = "all"
+tool_call_format = "kimi_k2"
+capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
+
 [presets.kimi-k2]
-display_name = "Kimi-K2"
+display_name = "Kimi-K2 Instruct"
 family = "kimi"
 match = ["*kimi-k2*"]
 serve = "vllm serve moonshotai/Kimi-K2-Instruct-0905 --trust-remote-code --enable-auto-tool-choice --tool-call-parser kimi_k2 --max-model-len 131072 --enable-prefix-caching"
-notes = "Kimi-K2-Thinking also needs --reasoning-parser kimi_k2."
+notes = "Non-thinking: do not set --reasoning-parser kimi_k2 (it assumes thinking)."
 [presets.kimi-k2.settings]
 temperature = 0.6
 max_output_tokens = 16384
 tool_profile = "extended"
-reasoning_history = "current_turn"
+reasoning_history = "drop"
 tool_call_format = "kimi_k2"
 capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = false }
 
@@ -190,8 +349,8 @@ capabilities = { tools = true, vision = false, parallel_tools = true, reasoning 
 display_name = "MiniMax-M2"
 family = "minimax"
 match = ["*minimax-m2*"]
-serve = "vllm serve MiniMaxAI/MiniMax-M2 --trust-remote-code --enable-auto-tool-choice --tool-call-parser minimax_m2 --reasoning-parser minimax_m2_append_think --max-model-len 131072 --enable-prefix-caching"
-notes = "Interleaved thinking; keep reasoning history for the current turn."
+serve = "vllm serve MiniMaxAI/MiniMax-M2 --trust-remote-code --enable-auto-tool-choice --tool-call-parser minimax_m2 --reasoning-parser minimax_m2 --max-model-len 131072 --enable-prefix-caching"
+notes = "Interleaved thinking: the `minimax_m2` parser splits reasoning and Odex round-trips it in history."
 [presets.minimax-m2.settings]
 temperature = 1.0
 top_p = 0.95
@@ -201,13 +360,27 @@ tool_profile = "extended"
 reasoning_history = "all"
 capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
 
-[presets.llama]
-display_name = "Llama 3.x / 4"
+[presets.llama4]
+display_name = "Llama 4"
 family = "llama"
-match = ["*llama-3*", "*llama3*", "*llama-4*"]
+match = ["*llama-4*", "*llama4*"]
+serve = "vllm serve meta-llama/Llama-4-Scout-17B-16E-Instruct --enable-auto-tool-choice --tool-call-parser llama4_pythonic --chat-template examples/tool_chat_template_llama4_pythonic.jinja --max-model-len 131072 --enable-prefix-caching"
+[presets.llama4.settings]
+temperature = 0.6
+top_p = 0.9
+max_output_tokens = 8192
+tool_profile = "extended"
+reasoning_history = "drop"
+tool_call_format = "pythonic"
+capabilities = { tools = true, vision = true, parallel_tools = true, reasoning = false }
+
+[presets.llama3]
+display_name = "Llama 3.x"
+family = "llama"
+match = ["*llama-3*", "*llama3*"]
 serve = "vllm serve meta-llama/Llama-3.3-70B-Instruct --enable-auto-tool-choice --tool-call-parser llama3_json --chat-template examples/tool_chat_template_llama3.1_json.jinja --max-model-len 131072 --enable-prefix-caching"
-notes = "Llama 4 uses --tool-call-parser llama4_pythonic."
-[presets.llama.settings]
+notes = "No parallel tool calls. Chat templates ship in the vLLM Docker image (examples/)."
+[presets.llama3.settings]
 temperature = 0.6
 top_p = 0.9
 max_output_tokens = 8192
@@ -220,21 +393,45 @@ capabilities = { tools = true, vision = false, parallel_tools = false, reasoning
 display_name = "Seed-OSS"
 family = "seed"
 match = ["*seed-oss*"]
-serve = "vllm serve ByteDance-Seed/Seed-OSS-36B-Instruct --enable-auto-tool-choice --tool-call-parser seed_oss --reasoning-parser seed_oss --max-model-len 131072 --enable-prefix-caching"
+serve = "vllm serve ByteDance-Seed/Seed-OSS-36B-Instruct --trust-remote-code --enable-auto-tool-choice --tool-call-parser seed_oss --reasoning-parser seed_oss --max-model-len 65536 --enable-prefix-caching"
+notes = "Thinking budget via chat_template_kwargs.thinking_budget (multiples of 512, -1 = unlimited)."
 [presets.seed-oss.settings]
 temperature = 1.1
 top_p = 0.95
 max_output_tokens = 16384
 tool_profile = "extended"
 reasoning_history = "current_turn"
+default_reasoning_effort = "medium"
 capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = true }
+[presets.seed-oss.settings.reasoning_effort_map]
+none = { chat_template_kwargs = { thinking_budget = 0 } }
+minimal = { chat_template_kwargs = { thinking_budget = 512 } }
+low = { chat_template_kwargs = { thinking_budget = 1024 } }
+medium = { chat_template_kwargs = { thinking_budget = 4096 } }
+high = { chat_template_kwargs = { thinking_budget = -1 } }
+
+[presets.mellum2]
+display_name = "Mellum2"
+family = "mellum"
+match = ["*mellum2*"]
+serve = "vllm serve JetBrains/Mellum2-12B-A2.5B-Instruct --trust-remote-code --enable-auto-tool-choice --tool-call-parser hermes --max-model-len 131072 --enable-prefix-caching"
+notes = "The -Thinking variant adds --reasoning-parser qwen3."
+[presets.mellum2.settings]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+max_output_tokens = 8192
+tool_profile = "extended"
+reasoning_history = "drop"
+tool_call_format = "hermes"
+capabilities = { tools = true, vision = false, parallel_tools = true, reasoning = false }
 
 [presets.generic]
 display_name = "Generic OpenAI-compatible"
 family = "generic"
 match = []
 serve = "vllm serve <model> --enable-auto-tool-choice --tool-call-parser hermes --enable-prefix-caching"
-notes = "Fallback when nothing else matches. Run Doctor to detect capabilities."
+notes = "Fallback when nothing else matches. Run Doctor to detect capabilities and the right parser."
 [presets.generic.settings]
 temperature = 0.7
 max_output_tokens = 8192
