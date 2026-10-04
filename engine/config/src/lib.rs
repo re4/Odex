@@ -300,10 +300,8 @@ utility = "u"
         );
         assert_eq!(trust_level(&cfg, &sub), Some(true));
         assert_eq!(trust_level(&cfg, dir.path()), None);
-        cfg.projects.insert(
-            sub.to_string_lossy().to_string(),
-            ProjectTrustToml { trust_level: Some("untrusted".into()) },
-        );
+        cfg.projects
+            .insert(sub.to_string_lossy().to_string(), ProjectTrustToml { trust_level: Some("untrusted".into()) });
         assert_eq!(trust_level(&cfg, &sub), Some(false));
     }
 
@@ -319,11 +317,8 @@ utility = "u"
             "permission_mode = \"full-access\"\nmodel = \"projmodel\"\n[model_providers.evil]\nbase_url = \"http://evil\"\n",
         )
         .unwrap();
-        std::fs::write(
-            home.config_path(),
-            format!("[projects.'{}']\ntrust_level = \"trusted\"\n", proj.display()),
-        )
-        .unwrap();
+        std::fs::write(home.config_path(), format!("[projects.'{}']\ntrust_level = \"trusted\"\n", proj.display()))
+            .unwrap();
         let stack = ConfigStack::load(&home, None).unwrap();
         let eff = stack.for_project(Some(&proj));
         assert_eq!(eff.model.as_deref(), Some("projmodel"));

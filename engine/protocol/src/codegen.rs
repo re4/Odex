@@ -68,11 +68,7 @@ pub fn generate_ts(out_dir: &Path) -> anyhow_lite::Result<()> {
     }
     imports.sort();
     for t in &imports {
-        let path = rels
-            .iter()
-            .find(|r| r.rsplit('/').next() == Some(t.as_str()))
-            .cloned()
-            .unwrap_or_else(|| t.clone());
+        let path = rels.iter().find(|r| r.rsplit('/').next() == Some(t.as_str())).cloned().unwrap_or_else(|| t.clone());
         let _ = writeln!(out, "import type {{ {t} }} from \"./{path}\";");
     }
     let _ = writeln!(out, "\nexport const PROTOCOL_VERSION = \"{}\";\n", crate::PROTOCOL_VERSION);
@@ -200,7 +196,10 @@ pub fn make_nullable_optional(src: &str) -> String {
                 out.push(c);
                 i += 1;
             }
-            _ if stack.last() == Some(&'{') && (c.is_alphabetic() || c == '_' || c == '$') && is_field_start(&chars, i) => {
+            _ if stack.last() == Some(&'{')
+                && (c.is_alphabetic() || c == '_' || c == '$')
+                && is_field_start(&chars, i) =>
+            {
                 // read identifier
                 let start = i;
                 while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '$') {

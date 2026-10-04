@@ -78,10 +78,7 @@ mod tests {
     #[test]
     fn method_tables_are_unique() {
         let mut seen = std::collections::HashSet::new();
-        for m in registry::CLIENT_REQUESTS
-            .iter()
-            .chain(registry::SERVER_NOTIFICATIONS)
-            .chain(registry::SERVER_REQUESTS)
+        for m in registry::CLIENT_REQUESTS.iter().chain(registry::SERVER_NOTIFICATIONS).chain(registry::SERVER_REQUESTS)
         {
             assert!(seen.insert(m.method), "duplicate method {}", m.method);
         }

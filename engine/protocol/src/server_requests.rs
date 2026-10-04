@@ -38,13 +38,7 @@ pub enum ApprovalKind {
         outside_workspace: Vec<String>,
     },
     #[serde(rename_all = "camelCase")]
-    Mcp {
-        server: String,
-        tool: String,
-        arguments: Value,
-        description: Option<String>,
-        read_only: bool,
-    },
+    Mcp { server: String, tool: String, arguments: Value, description: Option<String>, read_only: bool },
     #[serde(rename_all = "camelCase")]
     ComputerUse {
         app: String,
@@ -54,11 +48,7 @@ pub enum ApprovalKind {
         screenshot: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
-    Browser {
-        site: String,
-        action: String,
-        arguments: Value,
-    },
+    Browser { site: String, action: String, arguments: Value },
     #[serde(rename_all = "camelCase")]
     Download { url: String, filename: String },
     #[serde(rename_all = "camelCase")]

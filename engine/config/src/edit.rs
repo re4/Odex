@@ -61,8 +61,7 @@ pub fn apply_edits(text: &str, edits: &[ConfigEdit]) -> anyhow::Result<String> {
     let mut doc: DocumentMut = text.parse().context("config is not valid TOML")?;
     for e in edits {
         let path = parse_key_path(&e.key_path)?;
-        set_path(doc.as_table_mut(), &path, &e.value)
-            .with_context(|| format!("applying edit to `{}`", e.key_path))?;
+        set_path(doc.as_table_mut(), &path, &e.value).with_context(|| format!("applying edit to `{}`", e.key_path))?;
     }
     Ok(doc.to_string())
 }

@@ -49,11 +49,7 @@ pub struct Project {
 
 impl Project {
     pub fn primary_folder(&self) -> &str {
-        self.folders
-            .get(self.primary as usize)
-            .or_else(|| self.folders.first())
-            .map(|s| s.as_str())
-            .unwrap_or("")
+        self.folders.get(self.primary as usize).or_else(|| self.folders.first()).map(|s| s.as_str()).unwrap_or("")
     }
 }
 

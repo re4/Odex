@@ -256,12 +256,7 @@ pub enum ThreadItem {
         session_id: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
-    FileChange {
-        id: String,
-        changes: Vec<FileChange>,
-        status: ItemStatus,
-        error: Option<String>,
-    },
+    FileChange { id: String, changes: Vec<FileChange>, status: ItemStatus, error: Option<String> },
     /// Generic built-in tool (read_file, grep, list_dir, ...).
     #[serde(rename_all = "camelCase")]
     ToolCall {
@@ -286,18 +281,10 @@ pub enum ThreadItem {
         duration_ms: Option<u64>,
     },
     #[serde(rename_all = "camelCase")]
-    Plan {
-        id: String,
-        explanation: Option<String>,
-        steps: Vec<PlanStep>,
-    },
+    Plan { id: String, explanation: Option<String>, steps: Vec<PlanStep> },
     /// A structured plan proposed in plan mode, awaiting approval.
     #[serde(rename_all = "camelCase")]
-    ProposedPlan {
-        id: String,
-        markdown: String,
-        approved: bool,
-    },
+    ProposedPlan { id: String, markdown: String, approved: bool },
     #[serde(rename_all = "camelCase")]
     Subagent {
         id: String,
@@ -347,19 +334,9 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     ImageView { id: String, path: String },
     #[serde(rename_all = "camelCase")]
-    Review {
-        id: String,
-        summary: String,
-        findings: Vec<ReviewFinding>,
-        overall_correctness: Option<String>,
-    },
+    Review { id: String, summary: String, findings: Vec<ReviewFinding>, overall_correctness: Option<String> },
     #[serde(rename_all = "camelCase")]
-    Notice {
-        id: String,
-        level: NoticeLevel,
-        message: String,
-        code: Option<String>,
-    },
+    Notice { id: String, level: NoticeLevel, message: String, code: Option<String> },
     #[serde(rename_all = "camelCase")]
     Error { id: String, message: String },
 }
@@ -414,12 +391,23 @@ impl ThreadItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ItemDelta {
-    AgentMessage { text: String },
-    Reasoning { text: String },
+    AgentMessage {
+        text: String,
+    },
+    Reasoning {
+        text: String,
+    },
     /// Command output chunk; `stream` is `stdout`, `stderr` or `pty`.
-    CommandOutput { chunk: String, stream: String },
+    CommandOutput {
+        chunk: String,
+        stream: String,
+    },
     /// Partial tool arguments while the model is still writing them.
-    ToolArguments { text: String },
+    ToolArguments {
+        text: String,
+    },
     /// Free-form progress text (MCP progress, subagent activity, ...).
-    Progress { message: String },
+    Progress {
+        message: String,
+    },
 }

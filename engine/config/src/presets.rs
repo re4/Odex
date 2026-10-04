@@ -103,11 +103,9 @@ impl Presets {
     /// First preset whose glob matches the served model id (case-insensitive).
     pub fn match_model(&self, model_id: &str) -> Option<&PresetInfo> {
         let lower = model_id.to_lowercase();
-        self.list.iter().find(|p| {
-            p.match_patterns
-                .iter()
-                .any(|pat| wildmatch::WildMatch::new(&pat.to_lowercase()).matches(&lower))
-        })
+        self.list
+            .iter()
+            .find(|p| p.match_patterns.iter().any(|pat| wildmatch::WildMatch::new(&pat.to_lowercase()).matches(&lower)))
     }
 
     pub fn generic(&self) -> Option<&PresetInfo> {

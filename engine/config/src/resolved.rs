@@ -151,9 +151,8 @@ impl ResolvedModel {
                 effort_map.insert(e, v.clone());
             }
         }
-        let display_name = m.display_name.clone().unwrap_or_else(|| {
-            model_id.rsplit('/').next().unwrap_or(&model_id).to_string()
-        });
+        let display_name =
+            m.display_name.clone().unwrap_or_else(|| model_id.rsplit('/').next().unwrap_or(&model_id).to_string());
         Self {
             key: key.to_string(),
             provider_id,
@@ -351,7 +350,7 @@ impl Settings {
         let ar = cfg.automatic_review.clone().unwrap_or_default();
         let feats = cfg.features.clone().unwrap_or_default();
 
-        let permission_mode = cfg.permission_mode.unwrap_or_else(|| match cfg.sandbox_mode {
+        let permission_mode = cfg.permission_mode.unwrap_or(match cfg.sandbox_mode {
             Some(SandboxMode::ReadOnly) => PermissionMode::ReadOnly,
             Some(SandboxMode::DangerFullAccess) => PermissionMode::FullAccess,
             _ => PermissionMode::Auto,
@@ -379,11 +378,7 @@ impl Settings {
                 writable_roots: sb.writable_roots.iter().map(PathBuf::from).collect(),
             },
             mcp_servers: cfg.mcp_servers.clone(),
-            mcp_lazy_tools: cfg
-                .mcp
-                .as_ref()
-                .and_then(|m| m.lazy_tools.clone())
-                .unwrap_or_else(|| "auto".into()),
+            mcp_lazy_tools: cfg.mcp.as_ref().and_then(|m| m.lazy_tools.clone()).unwrap_or_else(|| "auto".into()),
             hooks: cfg.hooks.clone().unwrap_or_default(),
             computer_use: ComputerUseSettings {
                 enabled: cu.enabled.unwrap_or(false),
@@ -414,10 +409,7 @@ impl Settings {
 
     /// Model key configured for a role, falling back to `main`.
     pub fn role_model(&self, role: ModelRole) -> Option<&str> {
-        self.roles
-            .get(&role)
-            .or_else(|| self.roles.get(&ModelRole::Main))
-            .map(|s| s.as_str())
+        self.roles.get(&role).or_else(|| self.roles.get(&ModelRole::Main)).map(|s| s.as_str())
     }
 }
 
@@ -474,8 +466,7 @@ mod tests {
     #[test]
     fn role_fallback() {
         let home = OdexHome::at(std::env::temp_dir().join("odex-test-home-y"));
-        let mut cfg = ConfigToml::default();
-        cfg.model = Some("main-model".into());
+        let mut cfg = ConfigToml { model: Some("main-model".into()), ..Default::default() };
         cfg.roles.insert("compactor".into(), "small".into());
         let s = Settings::resolve(&cfg, &Presets::builtin(), &home);
         assert_eq!(s.role_model(ModelRole::Compactor), Some("small"));
