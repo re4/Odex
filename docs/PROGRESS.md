@@ -81,7 +81,7 @@ The suite has been verified against `odex-mock-vllm` with a rules file. It has *
 
 ## Desktop e2e coverage
 
-`desktop/e2e/` (70 tests, all passing on Windows): onboarding, thread end to end, approvals (exec escalation), plan mode, `/compact`, terminal, `!cmd`, edit and resend, find, project actions, undo, deep links, review pane (stage/revert/comment, hunks, big diffs, hand-off), files and editor, browser panel and agent browser use, MCP/skills/plugins/hooks, all settings panels with persistence, automations and Activity, and visual snapshots of home and thread in light and dark.
+`desktop/e2e/` (64 tests: 63 pass on Windows, 1 opt-in screenshot test skips): onboarding, thread end to end, approvals (exec escalation), plan mode, `/compact`, terminal, `!cmd`, edit and resend, find, project actions, undo, deep links, review pane (stage/revert/comment, hunks, big diffs, hand-off), files and editor, browser panel and agent browser use, MCP/skills/plugins/hooks, all settings panels with persistence, automations and Activity, and visual snapshots of home and thread in light and dark.
 
 ## Next
 
