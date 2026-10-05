@@ -110,6 +110,9 @@ pub struct ThreadReadResponse {
     pub sources: Vec<SourceEntry>,
     pub followups: Vec<String>,
     pub queued: Vec<Vec<UserInput>>,
+    /// The thread's rollout file (JSONL event log) on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -915,6 +918,9 @@ pub struct ContextGetResponse {
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeListResponse {
     pub worktrees: Vec<WorktreeInfo>,
+    /// The owning thread of each worktree (same order as `worktrees`).
+    #[serde(default)]
+    pub thread_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

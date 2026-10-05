@@ -36,6 +36,8 @@ pub struct ExecCtx<'a> {
     pub session_allows: bool,
     pub sandbox_available: bool,
     pub plan_mode: bool,
+    /// Refines `Auto` (PROMPT §5); read-only and full access ignore it.
+    pub policy: ApprovalPolicy,
 }
 
 /// Map permission mode + exec policy to a plan (PROMPT §5).
@@ -72,6 +74,51 @@ pub fn plan_exec(c: &ExecCtx) -> ExecPlan {
                 return ExecPlan::Run {
                     sandbox: !c.escalated && c.sandbox_available && (!c.eval.network_likely || c.network_allowed),
                 };
+            }
+            match c.policy {
+                ApprovalPolicy::Never => {
+                    // never ask: anything that would need approval goes back to the model
+                    if c.eval.decision == Some(Decision::Prompt) {
+                        return ExecPlan::Refuse(
+                            "This command needs approval under the command rules, but approvals are turned off \
+                             (approval_policy = \"never\"). Use another approach or ask the user to run it."
+                                .into(),
+                        );
+                    }
+                    if c.escalated {
+                        return ExecPlan::Refuse(
+                            "Running outside the sandbox needs approval, but approvals are turned off \
+                             (approval_policy = \"never\"). Run it without escalation or ask the user to run it."
+                                .into(),
+                        );
+                    }
+                    if !c.sandbox_available {
+                        return ExecPlan::Refuse(
+                            "The sandbox is unavailable and approvals are turned off (approval_policy = \"never\"), \
+                             so commands can't run. Ask the user to fix the sandbox or change the approval policy."
+                                .into(),
+                        );
+                    }
+                    return ExecPlan::Run { sandbox: true };
+                }
+                ApprovalPolicy::OnFailure => {
+                    // try everything in the sandbox first; a sandbox denial asks to retry outside it
+                    if c.eval.decision == Some(Decision::Prompt) {
+                        return ExecPlan::Ask { reason: "policy".into(), unsandboxed_if_approved: c.escalated };
+                    }
+                    if !c.sandbox_available {
+                        return ExecPlan::Ask { reason: "sandboxUnavailable".into(), unsandboxed_if_approved: true };
+                    }
+                    return ExecPlan::Run { sandbox: true };
+                }
+                ApprovalPolicy::Untrusted => {
+                    if !c.eval.known_safe && c.eval.decision != Some(Decision::Allow) {
+                        let outside =
+                            c.escalated || (c.eval.network_likely && !c.network_allowed) || !c.sandbox_available;
+                        return ExecPlan::Ask { reason: "untrusted".into(), unsandboxed_if_approved: outside };
+                    }
+                }
+                ApprovalPolicy::OnRequest => {}
             }
             if c.eval.decision == Some(Decision::Prompt) {
                 return ExecPlan::Ask { reason: "policy".into(), unsandboxed_if_approved: c.escalated };
@@ -322,6 +369,7 @@ mod tests {
             session_allows: false,
             sandbox_available: true,
             plan_mode: false,
+            policy: ApprovalPolicy::OnRequest,
         }
     }
 
@@ -351,6 +399,41 @@ mod tests {
         let mut c = ctx(PermissionMode::Auto, &unsafe_);
         c.sandbox_available = false;
         assert!(matches!(plan_exec(&c), ExecPlan::Ask { ref reason, .. } if reason == "sandboxUnavailable"));
+    }
+
+    #[test]
+    fn approval_policies_refine_auto() {
+        let safe = eval(None, true, false);
+        let unsafe_ = eval(None, false, false);
+        let net = eval(None, false, true);
+        let prompt = eval(Some(Decision::Prompt), false, false);
+        let with = |e, p: ApprovalPolicy| {
+            let mut c = ctx(PermissionMode::Auto, e);
+            c.policy = p;
+            plan_exec(&c)
+        };
+        // untrusted: only known-safe commands run without asking
+        assert_eq!(with(&safe, ApprovalPolicy::Untrusted), ExecPlan::Run { sandbox: true });
+        assert!(
+            matches!(with(&unsafe_, ApprovalPolicy::Untrusted), ExecPlan::Ask { ref reason, unsandboxed_if_approved: false } if reason == "untrusted")
+        );
+        assert!(matches!(with(&net, ApprovalPolicy::Untrusted), ExecPlan::Ask { unsandboxed_if_approved: true, .. }));
+        // on-failure: network/escalation run sandboxed first
+        assert_eq!(with(&net, ApprovalPolicy::OnFailure), ExecPlan::Run { sandbox: true });
+        let mut c = ctx(PermissionMode::Auto, &unsafe_);
+        c.policy = ApprovalPolicy::OnFailure;
+        c.escalated = true;
+        assert_eq!(plan_exec(&c), ExecPlan::Run { sandbox: true });
+        assert!(matches!(with(&prompt, ApprovalPolicy::OnFailure), ExecPlan::Ask { .. }));
+        // never: no asks at all
+        assert_eq!(with(&net, ApprovalPolicy::Never), ExecPlan::Run { sandbox: true });
+        assert!(matches!(with(&prompt, ApprovalPolicy::Never), ExecPlan::Refuse(_)));
+        c.policy = ApprovalPolicy::Never;
+        assert!(matches!(plan_exec(&c), ExecPlan::Refuse(_)));
+        // read-only and full access are unaffected
+        let mut c = ctx(PermissionMode::FullAccess, &unsafe_);
+        c.policy = ApprovalPolicy::Untrusted;
+        assert_eq!(plan_exec(&c), ExecPlan::Run { sandbox: false });
     }
 
     #[test]

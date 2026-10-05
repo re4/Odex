@@ -27,7 +27,8 @@ function applyTheme(): void {
   const dark = s.theme === 'dark' || (s.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
   root.dataset.theme = dark ? 'dark' : 'light'
   root.dataset.density = s.density
-  root.dataset.motion = s.reducedMotion === 'system' ? '' : s.reducedMotion
+  // reducedMotion 'on' means less motion: data-motion='off' disables transitions
+  root.dataset.motion = s.reducedMotion === 'system' ? '' : s.reducedMotion === 'on' ? 'off' : 'on'
   root.style.setProperty('--accent', s.accent)
   root.style.setProperty('--font-ui', s.uiFont)
   root.style.setProperty('--font-code', s.codeFont)
@@ -184,6 +185,29 @@ export function App() {
         if (c.command === 'nextAttention') nextAttention()
       }),
       window.odex.onAppshot((shot) => window.dispatchEvent(new CustomEvent('odex:attach', { detail: { type: 'appshot', ...shot } }))),
+      // engine asks to show a URL in the in-app browser (e.g. a dev server it started)
+      window.odex.onNotification(({ method, params }) => {
+        if (method === 'openUrl' && params.target === 'inApp' && /^(https?|file):/.test(params.url)) {
+          void window.odex.browser.newTab(params.url)
+          useApp.getState().setUi({ sidePanelOpen: true, sidePanelTab: 'browser' })
+        }
+      }),
+      // show the browser when the agent starts driving a tab for the thread on screen
+      (() => {
+        const driving = new Set<string>()
+        return window.odex.browser.onState((st: { tabs: Array<{ id: string; threadId: string | null; agentActive: boolean }> }) => {
+          const s = useApp.getState()
+          for (const t of st.tabs) {
+            const was = driving.has(t.id)
+            if (t.agentActive && !was) {
+              driving.add(t.id)
+              if (t.threadId && t.threadId === s.selectedThreadId && s.ui.view === 'thread' && !(s.ui.sidePanelOpen && s.ui.sidePanelTab === 'browser')) {
+                s.setUi({ sidePanelOpen: true, sidePanelTab: 'browser' })
+              }
+            } else if (!t.agentActive && was) driving.delete(t.id)
+          }
+        })
+      })(),
     ]
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
     mq.addEventListener('change', applyTheme)
@@ -255,6 +279,7 @@ export function App() {
       copyThreadId: () => withThread((id) => A.copy(id, 'Thread id copied')),
       copyCwd: () => withThread((id) => A.copy(useApp.getState().threads[id]?.thread.cwd ?? '', 'Working directory copied')),
       runAction1: () => window.dispatchEvent(new CustomEvent('odex:run-action', { detail: 0 })),
+      undo: () => void A.undoLast(),
       quit: () => void window.odex.app.quit(),
       ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`goto${i + 1}`, () => gotoThread(i)])),
     }),

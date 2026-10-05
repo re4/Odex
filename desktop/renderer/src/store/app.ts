@@ -328,6 +328,10 @@ export const useApp = create<AppState>((set, get) => ({
         const threads = { ...s.threads, [t.id]: cur ? { ...cur, thread: t, diffStats: t.diffStats ?? cur.diffStats } : emptyThreadState(t) }
         const order = s.threadOrder.includes(t.id) ? s.threadOrder : [t.id, ...s.threadOrder]
         set({ threads, threadOrder: order })
+        // a thread the user is looking at never becomes unread
+        if (t.unread && s.selectedThreadId === t.id && s.ui.view === 'thread' && document.visibilityState === 'visible') {
+          void call('thread/update', { threadId: t.id, unread: false }).catch(() => {})
+        }
         break
       }
       case 'thread/deleted': {
@@ -468,3 +472,6 @@ export function selectedThread(): ThreadState | undefined {
 export function isRunning(t: Thread | undefined): boolean {
   return !!t && (t.status === 'running' || t.status === 'waitingApproval' || t.status === 'reconnecting' || t.status === 'compacting')
 }
+
+// Exposed for end-to-end tests and debugging from devtools.
+;(window as unknown as { __odexStore?: typeof useApp }).__odexStore = useApp

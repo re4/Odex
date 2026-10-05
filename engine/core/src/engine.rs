@@ -549,6 +549,7 @@ impl Engine {
             sources: rt.sources.lock().unwrap().values().cloned().collect(),
             followups: rt.followups.lock().unwrap().clone(),
             queued: rt.queue.lock().unwrap().clone(),
+            rollout_path: rt.rollout_path().map(|p| p.to_string_lossy().to_string()),
         }
     }
 

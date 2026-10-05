@@ -61,6 +61,9 @@ const api = {
     command: (id: string, cmd: 'back' | 'forward' | 'reload' | 'hardReload' | 'stop' | 'devtools') => ipcRenderer.invoke('browser:command', id, cmd),
     close: (id: string) => ipcRenderer.invoke('browser:close', id),
     pick: (id: string) => ipcRenderer.invoke('browser:pick', id),
+    pickCancel: (id: string) => ipcRenderer.invoke('browser:pickCancel', id),
+    /** App shortcuts pressed while a page had focus (e.g. "Mod+K"). */
+    onKey: (cb: Listener<{ tabId: string; keys: string }>) => on('odex:browser-key', cb),
     history: () => ipcRenderer.invoke('browser:history'),
     clearHistory: (since?: number) => ipcRenderer.invoke('browser:clearHistory', since),
     clearData: () => ipcRenderer.invoke('browser:clearData'),
@@ -77,9 +80,16 @@ const api = {
     openInEditor: (p: string, line?: number) => ipcRenderer.invoke('shell:openInEditor', p, line),
   },
   fs: {
-    read: (p: string) => ipcRenderer.invoke('fs:read', p),
+    read: (p: string, maxBytes?: number) => ipcRenderer.invoke('fs:read', p, maxBytes),
     write: (p: string, text: string) => ipcRenderer.invoke('fs:write', p, text) as Promise<number>,
     exists: (p: string) => ipcRenderer.invoke('fs:exists', p) as Promise<boolean>,
+    /** Directory entries (unfiltered) with size/mtime. */
+    list: (dir: string) => ipcRenderer.invoke('fs:list', dir) as Promise<Array<{ name: string; path: string; isDir: boolean; isSymlink: boolean; size: number; mtime: number }>>,
+    stat: (p: string) => ipcRenderer.invoke('fs:stat', p) as Promise<{ exists: boolean; isDir: boolean; size: number; mtime: number; real: string }>,
+    /** Watch a directory (recursive where native) or file (polled); ref-counted; events arrive via `onChange`. */
+    watch: (p: string, ignore?: string[]) => ipcRenderer.invoke('fs:watch', p, ignore) as Promise<'recursive' | 'flat' | 'file' | null>,
+    unwatch: (p: string) => ipcRenderer.invoke('fs:unwatch', p) as Promise<void>,
+    onChange: (cb: Listener<{ path: string; names: string[]; all?: boolean }>) => on('odex:fs-changed', cb),
   },
   win: {
     newWindow: (threadId?: string) => ipcRenderer.invoke('win:new', threadId),
@@ -92,6 +102,7 @@ const api = {
     info: () => ipcRenderer.invoke('app:info'),
     quit: () => ipcRenderer.invoke('app:quit'),
     killSwitch: (on?: boolean) => ipcRenderer.invoke('app:killSwitch', on),
+    killSwitchState: () => ipcRenderer.invoke('app:killSwitchState') as Promise<boolean>,
     theme: () => ipcRenderer.invoke('app:theme') as Promise<'dark' | 'light'>,
   },
   platform: process.platform,

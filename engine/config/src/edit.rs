@@ -172,6 +172,10 @@ pub fn json_to_value(v: &Json) -> anyhow::Result<Value> {
 /// Apply edits to a config file atomically, validating the result parses
 /// as a valid Odex config before replacing the file.
 pub fn write_edits(path: &Path, edits: &[ConfigEdit]) -> anyhow::Result<()> {
+    // Read-modify-write must not interleave: concurrent requests would drop
+    // each other's keys and race on the temp file.
+    static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -268,5 +272,35 @@ mod tests {
         assert!(write_edits(&p, &[edit("permission_mode", json!("yolo"))]).is_err());
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(text.contains("auto"));
+    }
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn concurrent_writes_keep_every_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let p = path.clone();
+                std::thread::spawn(move || {
+                    write_edits(
+                        &p,
+                        &[ConfigEdit { key_path: format!("profiles.p{i}.model"), value: json!(format!("m{i}")) }],
+                    )
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap().unwrap();
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for i in 0..16 {
+            assert!(text.contains(&format!("m{i}")), "key {i} lost:\n{text}");
+        }
     }
 }

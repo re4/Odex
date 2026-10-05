@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FileText, MessageSquare, Terminal } from 'lucide-react'
+import { FileText, FolderGit2, MessageSquare, Palette, Terminal } from 'lucide-react'
 import type { FileMatch } from '@shared/index'
 import { useApp } from '@/store/app'
 import { call } from '@/lib/rpc'
 import { SHORTCUTS, displayKeys } from '@/lib/shortcuts'
 import * as A from '@/lib/actions'
 import { openFileInPanel } from '@/views/items'
+import { SETTINGS_PANELS } from '@/views/settings/registry'
 
 interface Entry {
   id: string
@@ -68,8 +69,8 @@ export function CommandPalette() {
   const entries: Entry[] = useMemo(() => {
     if (fileMode) {
       return files.map((f) => {
-        const rel = f.path.startsWith(f.root) ? f.path.slice(f.root.length).replace(/^[\\/]/, '') : f.path
-        return { id: f.path, label: rel, icon: <FileText size={13} />, run: () => openFileInPanel(f.path) }
+        const { abs, rel } = A.matchPath(f)
+        return { id: abs, label: rel, icon: <FileText size={13} />, run: () => openFileInPanel(abs) }
       })
     }
     if (threadMode) {
@@ -102,22 +103,47 @@ export function CommandPalette() {
         } else void c.run(useApp.getState().selectedThreadId, '')
       },
     }))
-    const settingsEntries: Entry[] = [
-      ['general', 'Settings: General'],
-      ['models', 'Settings: Models & Endpoints'],
-      ['mcp', 'Settings: MCP servers'],
-      ['skills', 'Settings: Skills'],
-      ['hooks', 'Settings: Hooks'],
-      ['memories', 'Settings: Memories'],
-      ['shortcuts', 'Settings: Keyboard shortcuts'],
-    ].map(([id, label]) => ({ id: `set:${id}`, label, run: () => A.openSettings(id) }))
+    const settingsEntries: Entry[] = SETTINGS_PANELS.map((p) => ({ id: `set:${p.id}`, label: `Settings: ${p.label}`, detail: p.keywords, run: () => A.openSettings(p.id) }))
+    const st = useApp.getState()
+    const projectEntries: Entry[] = st.projects.map((p) => ({
+      id: `proj:${p.id}`,
+      label: `Project: ${p.name}`,
+      detail: p.folders[p.primary] ?? p.folders[0],
+      icon: <FolderGit2 size={13} />,
+      run: () => {
+        setUi({ newThreadProjectId: p.id })
+        void useApp.getState().selectThread(null)
+      },
+    }))
+    const themeEntries: Entry[] = (['system', 'light', 'dark'] as const).map((t) => ({
+      id: `theme:${t}`,
+      label: `Theme: ${t[0].toUpperCase()}${t.slice(1)}`,
+      icon: <Palette size={13} />,
+      run: () => void useApp.getState().setSettings({ theme: t }),
+    }))
+    const threadEntries: Entry[] = order
+      .map((id) => threads[id]?.thread)
+      .filter((t) => t && !t.archived)
+      .map((t) => ({
+        id: `thr:${t!.id}`,
+        label: t!.name || t!.preview || 'New thread',
+        detail: t!.unread ? 'unread' : t!.status === 'waitingApproval' ? 'needs approval' : undefined,
+        icon: <MessageSquare size={13} />,
+        run: () => void useApp.getState().selectThread(t!.id),
+      }))
     const extra: Entry[] = [
       { id: 'onboarding', label: 'Run setup', run: () => setUi({ onboardingOpen: true }) },
       { id: 'restart-engine', label: 'Restart engine', run: () => void window.odex.restartEngine() },
       { id: 'search', label: 'Search threads', run: () => setUi({ view: 'search' }) },
       { id: 'automations', label: 'Automations', run: () => setUi({ view: 'automations' }) },
+      { id: 'add-project', label: 'Add project folder…', icon: <FolderGit2 size={13} />, run: () => void A.addProjectFromDialog() },
     ]
-    return [...actions, ...slash, ...settingsEntries, ...extra]
+    if (!query) {
+      // empty query: threads needing attention first, then commands
+      const attention = threadEntries.filter((e) => e.detail)
+      return [...attention, ...actions, ...slash, ...projectEntries, ...themeEntries, ...settingsEntries, ...extra]
+    }
+    return [...actions, ...slash, ...settingsEntries, ...projectEntries, ...themeEntries, ...extra, ...threadEntries]
       .map((e) => ({ e, s: Math.max(fuzzy(query, e.label), e.detail ? fuzzy(query, e.detail) / 2 : 0) }))
       .filter((x) => x.s > 0)
       .sort((a, b) => b.s - a.s)

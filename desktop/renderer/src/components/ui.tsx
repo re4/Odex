@@ -4,6 +4,8 @@ import { createPortal } from 'react-dom'
 /** Modal dialog with backdrop; Esc and backdrop click close it. */
 export function Modal(props: { title?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean; className?: string; labelledBy?: string }) {
   const ref = useRef<HTMLDivElement>(null)
+  const onClose = useRef(props.onClose)
+  onClose.current = props.onClose
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null
     const first = ref.current?.querySelector<HTMLElement>('input, textarea, select, button:not([data-close])')
@@ -11,7 +13,7 @@ export function Modal(props: { title?: ReactNode; onClose: () => void; children:
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation()
-        props.onClose()
+        onClose.current()
       }
     }
     window.addEventListener('keydown', onKey, true)
@@ -19,7 +21,7 @@ export function Modal(props: { title?: ReactNode; onClose: () => void; children:
       window.removeEventListener('keydown', onKey, true)
       prev?.focus?.()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [])
   return createPortal(
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}>
@@ -67,6 +69,8 @@ export function Menu(props: { anchor: HTMLElement | { x: number; y: number } | n
   }, [props.anchor, props.align, props.above, props.items.length])
 
   useEffect(() => {
+    // a closed menu (anchor = null) must not capture keys or clicks
+    if (!props.anchor) return
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) props.onClose()
     }
@@ -86,9 +90,10 @@ export function Menu(props: { anchor: HTMLElement | { x: number; y: number } | n
         it.onSelect?.()
       }
     }
-    setTimeout(() => window.addEventListener('mousedown', onDown), 0)
+    const t = setTimeout(() => window.addEventListener('mousedown', onDown), 0)
     window.addEventListener('keydown', onKey, true)
     return () => {
+      clearTimeout(t)
       window.removeEventListener('mousedown', onDown)
       window.removeEventListener('keydown', onKey, true)
     }
@@ -135,7 +140,9 @@ export function useMenu(): [HTMLElement | null, (e: React.MouseEvent<HTMLElement
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const open = useCallback((e: React.MouseEvent<HTMLElement>) => {
     e.stopPropagation()
-    setAnchor((a) => (a ? null : e.currentTarget))
+    // read the target now: the updater may run after the event is gone
+    const el = e.currentTarget
+    setAnchor((a) => (a ? null : el))
   }, [])
   const close = useCallback(() => setAnchor(null), [])
   return [anchor, open, close]

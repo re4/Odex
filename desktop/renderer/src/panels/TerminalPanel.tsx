@@ -48,15 +48,16 @@ function XTerm({ id, active }: { id: string; active: boolean }) {
     const sub = t.onData((data) => void window.odex.terminals.write(id, data))
     t.attachCustomKeyEventHandler((e) => {
       // let app shortcuts through; copy when there's a selection
-      if (e.type === 'keydown' && e.ctrlKey && e.key === 'c' && t.hasSelection()) {
+      if (e.type === 'keydown' && e.ctrlKey && e.key.toLowerCase() === 'c' && t.hasSelection()) {
         void navigator.clipboard.writeText(t.getSelection())
         return false
       }
-      if (e.type === 'keydown' && e.ctrlKey && e.key === 'v') {
+      if (e.type === 'keydown' && e.ctrlKey && e.key.toLowerCase() === 'v') {
         void navigator.clipboard.readText().then((x) => window.odex.terminals.write(id, x))
         return false
       }
-      if (e.ctrlKey && (e.key === 'j' || e.key === '`' || e.key === 'k' || e.key === 'b')) return false
+      // app shortcuts pass through (Caps Lock may report upper case)
+      if (e.ctrlKey && ['j', '`', 'k', 'b', 'p', ','].includes(e.key.toLowerCase())) return false
       return true
     })
     const ro = new ResizeObserver(() => {

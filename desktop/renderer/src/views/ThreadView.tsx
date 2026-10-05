@@ -1,11 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ExternalLink, GitBranch, MoreHorizontal, Pause, Target, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, ExternalLink, GitBranch, MoreHorizontal, Pause, Pin, Target, X } from 'lucide-react'
+import type { ThreadItem } from '@shared/index'
 import { threadItems, useApp } from '@/store/app'
 import { call } from '@/lib/rpc'
 import { ItemView } from '@/views/items'
 import { ApprovalCard } from '@/views/ApprovalCard'
 import { Composer } from '@/views/Composer'
+import { ProjectActions } from '@/views/ProjectActions'
 import { Menu } from '@/components/ui'
 import { threadMenu } from '@/views/Sidebar'
 import * as A from '@/lib/actions'
@@ -38,6 +40,32 @@ function GoalRow({ threadId }: { threadId: string }) {
       )}
       <button className="icon-btn sm" title="Clear goal" aria-label="Clear goal" onClick={() => void call('thread/goal/clear', { threadId })}>
         <X size={13} />
+      </button>
+    </div>
+  )
+}
+
+/** Warn when the thread's model is not served by any endpoint right now. */
+function ModelWarning({ modelKey }: { modelKey: string | null }) {
+  const models = useApp((s) => s.models)
+  const roles = useApp((s) => s.roles)
+  const providers = useApp((s) => s.providers)
+  const key = modelKey ?? roles.main ?? null
+  if (!key || providers.length === 0) return null
+  const m = models.find((x) => x.key === key || x.modelId === key)
+  const prov = providers.find((p) => p.id === (m?.providerId ?? key.split(':')[0]))
+  if (m?.available && prov?.health !== 'unreachable') return null
+  const why = !prov ? 'its endpoint is not configured' : prov.health === 'unreachable' ? `${prov.name} is unreachable` : 'the endpoint does not serve it'
+  return (
+    <div className="banner info" style={{ borderRadius: 'var(--radius)', marginBottom: 8 }} role="status">
+      <span className="grow small">
+        Model <b>{m?.displayName ?? key}</b> is unavailable: {why}.
+      </span>
+      <button className="btn btn-sm" onClick={() => window.dispatchEvent(new CustomEvent('odex:open-picker', { detail: 'model' }))}>
+        Switch model
+      </button>
+      <button className="btn btn-sm btn-ghost" onClick={() => void useApp.getState().refreshModels(true)}>
+        Retry
       </button>
     </div>
   )
@@ -89,15 +117,17 @@ function Queued({ threadId }: { threadId: string }) {
   )
 }
 
-function FindBar({ onClose, onQuery }: { onClose: () => void; onQuery: (q: string) => void }) {
+function FindBar({ onClose, onQuery, count, index }: { onClose: () => void; onQuery: (q: string) => void; count: number; index: number }) {
   const [q, setQ] = useState('')
+  const step = (d: number) => window.dispatchEvent(new CustomEvent('odex:find-next', { detail: d }))
   return (
-    <div className="find-bar">
+    <div className="find-bar" role="search">
       <input
         className="input"
         style={{ height: 26, maxWidth: 300 }}
         autoFocus
         placeholder="Find in thread"
+        aria-label="Find in thread"
         value={q}
         onChange={(e) => {
           setQ(e.target.value)
@@ -105,14 +135,83 @@ function FindBar({ onClose, onQuery }: { onClose: () => void; onQuery: (q: strin
         }}
         onKeyDown={(e) => {
           if (e.key === 'Escape') onClose()
-          if (e.key === 'Enter') window.dispatchEvent(new CustomEvent('odex:find-next', { detail: e.shiftKey ? -1 : 1 }))
+          if (e.key === 'Enter') step(e.shiftKey ? -1 : 1)
         }}
       />
+      <span className="xs subtle" style={{ minWidth: 54 }} aria-live="polite">
+        {q ? (count ? `${index + 1} of ${count}` : 'No results') : ''}
+      </span>
+      <button className="icon-btn sm" aria-label="Previous match" title="Previous (Shift+Enter)" disabled={!count} onClick={() => step(-1)}>
+        <ChevronUp size={13} />
+      </button>
+      <button className="icon-btn sm" aria-label="Next match" title="Next (Enter)" disabled={!count} onClick={() => step(1)}>
+        <ChevronDown size={13} />
+      </button>
       <button className="icon-btn sm" aria-label="Close find" onClick={onClose}>
         <X size={13} />
       </button>
     </div>
   )
+}
+
+/** Searchable text of an item (what the user sees, not ids). */
+function itemText(item: ThreadItem): string {
+  switch (item.type) {
+    case 'userMessage':
+      return item.content.map((c) => (c.type === 'text' ? c.text : '')).join(' ')
+    case 'agentMessage':
+    case 'reasoning':
+      return item.text
+    case 'commandExecution':
+      return `${item.command}\n${item.output}`
+    case 'fileChange':
+      return item.changes.map((c) => c.path).join(' ')
+    case 'toolCall':
+      return `${item.tool} ${item.summary ?? ''}`
+    case 'mcpToolCall':
+      return `${item.server} ${item.tool}`
+    case 'plan':
+      return item.steps.map((p) => p.step).join(' ')
+    case 'proposedPlan':
+      return item.markdown
+    case 'review':
+      return `${item.summary} ${item.findings.map((f) => `${f.title} ${f.body}`).join(' ')}`
+    case 'notice':
+    case 'error':
+      return item.message
+    default:
+      return ''
+  }
+}
+
+/** Highlight every occurrence of `q` under `root` (CSS Custom Highlight API). */
+function paintHighlights(root: HTMLElement | null, q: string, currentRow: number | null): void {
+  const reg = (CSS as unknown as { highlights?: Map<string, unknown> }).highlights
+  if (!reg) return
+  reg.delete('odex-find')
+  reg.delete('odex-find-current')
+  if (!root || !q) return
+  const needle = q.toLowerCase()
+  const all: Range[] = []
+  const current: Range[] = []
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const text = (n.nodeValue ?? '').toLowerCase()
+    let i = text.indexOf(needle)
+    if (i < 0) continue
+    const row = (n.parentElement?.closest('[data-index]') as HTMLElement | null)?.dataset.index
+    while (i >= 0) {
+      const r = new Range()
+      r.setStart(n, i)
+      r.setEnd(n, i + needle.length)
+      if (currentRow != null && row === String(currentRow)) current.push(r)
+      else all.push(r)
+      i = text.indexOf(needle, i + needle.length)
+    }
+  }
+  const H = (window as unknown as { Highlight: new (...r: Range[]) => unknown }).Highlight
+  reg.set('odex-find', new H(...all))
+  reg.set('odex-find-current', new H(...current))
 }
 
 export function ThreadView() {
@@ -126,17 +225,32 @@ export function ThreadView() {
   const stick = useRef(true)
   const [menu, setMenu] = useState<HTMLElement | null>(null)
   const [find, setFind] = useState('')
+  const [onTop, setOnTop] = useState(false)
+  const [findIdx, setFindIdx] = useState(0)
 
   const rows = useMemo(() => {
-    const r = threadItems(ts).filter(({ item }) => {
-      if (item.type === 'agentMessage' && !item.text.trim()) return false
+    // a plan turn's final message is shown by its proposed-plan card instead
+    const planTexts = new Set<string>()
+    for (const t of ts?.turns ?? []) for (const i of t.items) if (i.type === 'proposedPlan') planTexts.add(i.markdown.trim())
+    // a review turn's structured reply is shown by its review card instead
+    const reviewTurns = new Set((ts?.turns ?? []).filter((t) => t.mode === 'review' && t.items.some((i) => i.type === 'review')).map((t) => t.id))
+    const r = threadItems(ts).filter(({ item, turn }) => {
+      if (item.type === 'agentMessage' && (!item.text.trim() || planTexts.has(item.text.trim()) || reviewTurns.has(turn.id))) return false
       if (item.type === 'reasoning' && !item.text.trim()) return false
       return true
     })
-    if (!find) return r
+    return r
+  }, [ts])
+
+  const matches = useMemo(() => {
+    if (!find) return [] as number[]
     const q = find.toLowerCase()
-    return r.filter(({ item }) => JSON.stringify(item).toLowerCase().includes(q))
-  }, [ts, find])
+    const out: number[] = []
+    rows.forEach(({ item }, i) => {
+      if (itemText(item).toLowerCase().includes(q)) out.push(i)
+    })
+    return out
+  }, [rows, find])
 
   const virt = useVirtualizer({
     count: rows.length,
@@ -169,6 +283,38 @@ export function ThreadView() {
     }
   }, [rows, ts?.turns])
 
+  // find: jump between matching rows and highlight the text
+  useEffect(() => setFindIdx(0), [find])
+  useEffect(() => {
+    const onNext = (e: Event) => {
+      if (!matches.length) return
+      const d = (e as CustomEvent<number>).detail ?? 1
+      setFindIdx((i) => (i + d + matches.length) % matches.length)
+    }
+    window.addEventListener('odex:find-next', onNext)
+    return () => window.removeEventListener('odex:find-next', onNext)
+  }, [matches])
+  const currentRow = matches.length ? matches[Math.min(findIdx, matches.length - 1)] : null
+  useEffect(() => {
+    if (currentRow != null) {
+      stick.current = false
+      virt.scrollToIndex(currentRow, { align: 'center' })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRow])
+  useEffect(() => {
+    let raf2 = 0
+    // paint after the virtualizer has rendered the target rows
+    const raf = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => paintHighlights(ui.findOpen ? scrollRef.current : null, find, currentRow))
+    })
+    return () => {
+      cancelAnimationFrame(raf)
+      cancelAnimationFrame(raf2)
+    }
+  })
+  useEffect(() => () => paintHighlights(null, '', null), [])
+
   if (!id || !ts) return null
   const t = ts.thread
   const pending = requests.filter((r) => r.method === 'approval/request' && r.params.threadId === id)
@@ -198,9 +344,10 @@ export function ThreadView() {
           </span>
         )}
         <span className="spacer" />
+        <ProjectActions projectId={t.projectId} threadId={t.id} cwd={t.worktree?.path ?? t.cwd} />
         {t.diffStats && t.diffStats.filesChanged > 0 && (
           <button className="chip" onClick={() => setUi({ sidePanelOpen: true, sidePanelTab: 'review' })} title="Open review (Ctrl+Shift+G)">
-            {t.diffStats.filesChanged} files <span className="text-add">+{t.diffStats.additions}</span> <span className="text-del">-{t.diffStats.deletions}</span>
+            {t.diffStats.filesChanged} {t.diffStats.filesChanged === 1 ? 'file' : 'files'} <span className="text-add">+{t.diffStats.additions}</span> <span className="text-del">-{t.diffStats.deletions}</span>
           </button>
         )}
         {t.parentThreadId && (
@@ -208,9 +355,24 @@ export function ThreadView() {
             Parent thread
           </button>
         )}
-        <button className="icon-btn" aria-label="Open in new window" title="Pop out" onClick={() => void window.odex.win.newWindow(id)}>
-          <ExternalLink size={14} />
-        </button>
+        {ui.popout ? (
+          <button
+            className={`icon-btn ${onTop ? 'active' : ''}`}
+            aria-label="Keep window on top"
+            aria-pressed={onTop}
+            title="Always on top"
+            onClick={() => {
+              void window.odex.win.alwaysOnTop(!onTop)
+              setOnTop(!onTop)
+            }}
+          >
+            <Pin size={14} />
+          </button>
+        ) : (
+          <button className="icon-btn" aria-label="Open in new window" title="Pop out" onClick={() => void window.odex.win.newWindow(id)}>
+            <ExternalLink size={14} />
+          </button>
+        )}
         <button className="icon-btn" aria-label="Thread actions" onClick={(e) => setMenu(e.currentTarget)}>
           <MoreHorizontal size={15} />
         </button>
@@ -218,6 +380,8 @@ export function ThreadView() {
       </div>
       {ui.findOpen && (
         <FindBar
+          count={matches.length}
+          index={Math.min(findIdx, Math.max(0, matches.length - 1))}
           onClose={() => {
             setUi({ findOpen: false })
             setFind('')
@@ -263,6 +427,7 @@ export function ThreadView() {
       </div>
       <div className="composer-area">
         <div className="inner">
+          <ModelWarning modelKey={t.model ?? null} />
           <GoalRow threadId={id} />
           <Queued threadId={id} />
           {!running && ts.followups.length > 0 && (

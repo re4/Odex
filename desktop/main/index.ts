@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import * as browser from './browser'
 import { EngineHost } from './engine-host'
+import * as fsw from './fswatch'
 import { odexHome, resourcePath } from './paths'
 import { hasSecret, setSecret } from './secrets'
 import { getSettings, onSettings, setSettings } from './settings'
@@ -97,6 +98,7 @@ function updateTray(): void {
 
 async function toggleKillSwitch(force?: boolean): Promise<void> {
   killSwitch = force ?? !killSwitch
+  browser.setKillSwitch(killSwitch)
   try {
     await engine.request('computerUse/killSwitch', { engaged: killSwitch })
   } catch {}
@@ -164,9 +166,14 @@ engine.serverRequestHandler = async (method, params: any) => {
 
 browser.setDownloadHandler(async (info) => {
   try {
-    const r = (await askRenderer('download/approve', info)) as { allow: boolean }
-    if (!r?.allow) return null
-    const res = await dialog.showSaveDialog({ defaultPath: path.join(app.getPath('downloads'), info.filename) })
+    // The save dialog is the approval: nothing downloads unless the user picks a location.
+    let host = info.url
+    try {
+      host = new URL(info.url).host || info.url
+    } catch {}
+    const opts = { title: `Download ${info.filename} from ${host}?`, buttonLabel: 'Download', defaultPath: path.join(app.getPath('downloads'), info.filename) }
+    const w = BrowserWindow.getFocusedWindow() ?? mainWindow
+    const res = w && !w.isDestroyed() ? await dialog.showSaveDialog(w, opts) : await dialog.showSaveDialog(opts)
     return res.canceled ? null : (res.filePath ?? null)
   } catch {
     return null
@@ -228,6 +235,8 @@ function registerIpc(): void {
   ipcMain.handle('browser:command', (_e, id: string, cmd) => browser.command(id, cmd))
   ipcMain.handle('browser:close', (_e, id: string) => browser.closeTab(id))
   ipcMain.handle('browser:pick', (_e, id: string) => browser.pickForComment(id))
+  ipcMain.handle('browser:pickCancel', (_e, id: string) => browser.cancelPick(id))
+  ipcMain.handle('app:killSwitchState', () => killSwitch)
   ipcMain.handle('browser:history', () => browser.readHistory())
   ipcMain.handle('browser:clearHistory', (_e, since?: number) => browser.clearHistory(since))
   ipcMain.handle('browser:clearData', () => browser.clearBrowsingData())
@@ -276,6 +285,10 @@ function registerIpc(): void {
     return (await fs.promises.stat(p)).mtimeMs
   })
   ipcMain.handle('fs:exists', (_e, p: string) => fs.existsSync(p))
+  ipcMain.handle('fs:list', (_e, dir: string) => fsw.listDir(dir))
+  ipcMain.handle('fs:stat', (_e, p: string) => fsw.statPath(p))
+  ipcMain.handle('fs:watch', (e, p: string, ignore?: string[]) => fsw.watchPath(e.sender, p, ignore))
+  ipcMain.handle('fs:unwatch', (e, p: string) => fsw.unwatchPath(e.sender, p))
 
   ipcMain.handle('win:new', (_e, threadId?: string) => {
     createWindow({ threadId, popout: true })

@@ -360,6 +360,7 @@ async fn approve_exec(
         session_allows,
         sandbox_available: sandbox_available(o.engine, s),
         plan_mode: o.tctx.mode == TurnMode::Plan,
+        policy: s.raw.approval_policy.unwrap_or_default(),
     });
     match plan {
         ExecPlan::Refuse(msg) => Err(o.err(msg)),
@@ -498,7 +499,12 @@ async fn shell(o: &Out<'_>) -> ToolOutcome {
             Err(e) => return o.err(e),
         };
         // sandbox denied something → offer to retry unsandboxed (on-failure)
-        if denied && sandboxed && attempt == 1 && o.rt.thread().permission_mode == PermissionMode::Auto {
+        if denied
+            && sandboxed
+            && attempt == 1
+            && o.rt.thread().permission_mode == PermissionMode::Auto
+            && o.tctx.settings.raw.approval_policy != Some(ApprovalPolicy::Never)
+        {
             let kind = ApprovalKind::Exec {
                 command: command.clone(),
                 cwd: workdir.to_string_lossy().to_string(),

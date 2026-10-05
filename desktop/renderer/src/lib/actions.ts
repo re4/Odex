@@ -68,6 +68,34 @@ export async function interrupt(threadId: string): Promise<void> {
   await call('turn/interrupt', { threadId }).catch(() => {})
 }
 
+// ------------------------------------------------------------- undo stack
+// Client-side undo for app actions (archive, pin, rename): Ctrl+Z outside text fields.
+
+interface UndoEntry {
+  label: string
+  undo: () => Promise<unknown>
+}
+const undoStack: UndoEntry[] = []
+
+export function pushUndo(label: string, undo: () => Promise<unknown>): void {
+  undoStack.push({ label, undo })
+  if (undoStack.length > 50) undoStack.shift()
+}
+
+export async function undoLast(): Promise<void> {
+  const e = undoStack.pop()
+  if (!e) {
+    toast('Nothing to undo')
+    return
+  }
+  try {
+    await e.undo()
+    toast(`Undone: ${e.label}`)
+  } catch (err) {
+    toast(`Could not undo ${e.label}: ${(err as Error).message}`, 'error')
+  }
+}
+
 export async function archiveThread(threadId: string): Promise<void> {
   const t = useApp.getState().threads[threadId]?.thread
   let removeWorktree = false
@@ -75,19 +103,29 @@ export async function archiveThread(threadId: string): Promise<void> {
     removeWorktree = await confirmDialog('Archive thread', `Also remove its worktree at ${t.worktree.path}? A snapshot is kept so it can be restored.`, 'Remove worktree')
   }
   await call('thread/archive', { threadId, removeWorktree })
+  pushUndo('archive', async () => {
+    await call('thread/unarchive', { threadId })
+    await useApp.getState().selectThread(threadId)
+  })
+  toast('Thread archived · Ctrl+Z to undo')
   const s = useApp.getState()
   if (s.selectedThreadId === threadId) await s.selectThread(null)
 }
 
 export async function renameThread(threadId: string): Promise<void> {
   const t = useApp.getState().threads[threadId]?.thread
-  const name = await promptText('Rename thread', t?.name ?? '')
-  if (name != null) await call('thread/update', { threadId, name })
+  const before = t?.name ?? null
+  const name = await promptText('Rename thread', before ?? '')
+  if (name == null || name === before) return
+  await call('thread/update', { threadId, name })
+  pushUndo('rename', () => call('thread/update', { threadId, name: before ?? '' }))
 }
 
 export async function togglePin(threadId: string): Promise<void> {
   const t = useApp.getState().threads[threadId]?.thread
-  await call('thread/update', { threadId, pinned: !t?.pinned })
+  const pinned = !t?.pinned
+  await call('thread/update', { threadId, pinned })
+  pushUndo(pinned ? 'pin' : 'unpin', () => call('thread/update', { threadId, pinned: !pinned }))
 }
 
 export async function markUnread(threadId: string, unread = true): Promise<void> {
@@ -125,6 +163,17 @@ export async function addProject(folders: string[]): Promise<string | null> {
   await useApp.getState().refreshProjects()
   useApp.getState().setUi({ newThreadProjectId: r.project.id })
   return r.project.id
+}
+
+/** A search match's absolute path (`fs/search` paths are relative to their root). */
+export function matchPath(m: { path: string; root: string }): { abs: string; rel: string } {
+  const isAbs = /^([a-zA-Z]:[\\/]|[\\/])/.test(m.path)
+  if (isAbs) {
+    const rel = m.path.toLowerCase().startsWith(m.root.toLowerCase()) ? m.path.slice(m.root.length).replace(/^[\\/]/, '') : m.path
+    return { abs: m.path, rel }
+  }
+  const sep = m.root.includes('\\') ? '\\' : '/'
+  return { abs: `${m.root.replace(/[\\/]+$/, '')}${sep}${m.path.replace(/\//g, sep)}`, rel: m.path }
 }
 
 /** `http://host:8000` → `http://host:8000/v1` (vLLM serves the OpenAI API under /v1). */

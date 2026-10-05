@@ -131,6 +131,10 @@ impl ThreadRt {
         self.rollout.lock().unwrap().append(&line);
     }
 
+    pub fn rollout_path(&self) -> Option<std::path::PathBuf> {
+        Some(self.rollout.lock().unwrap().path().to_path_buf())
+    }
+
     pub fn update<F: FnOnce(&mut Thread)>(&self, f: F) -> Thread {
         let mut m = self.meta.lock().unwrap();
         f(&mut m);

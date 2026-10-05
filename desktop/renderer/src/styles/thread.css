@@ -490,6 +490,13 @@
   padding: 4px 8px;
   border-bottom: 1px solid var(--border);
 }
+::highlight(odex-find) {
+  background-color: color-mix(in srgb, var(--warning) 35%, transparent);
+}
+::highlight(odex-find-current) {
+  background-color: color-mix(in srgb, var(--warning) 80%, transparent);
+  color: #000;
+}
 mark.find-hit {
   background: color-mix(in srgb, var(--warning) 45%, transparent);
   color: inherit;

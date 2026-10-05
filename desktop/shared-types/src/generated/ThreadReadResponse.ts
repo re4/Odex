@@ -7,4 +7,8 @@ import type { Thread } from "./Thread";
 import type { Turn } from "./Turn";
 import type { UserInput } from "./UserInput";
 
-export type ThreadReadResponse = { thread: Thread, turns: Array<Turn>, pendingApprovals: Array<ApprovalRequestParams>, context?: ContextStatus | null, plan: Array<PlanStep>, sources: Array<SourceEntry>, followups: Array<string>, queued: Array<Array<UserInput>>, };
+export type ThreadReadResponse = { thread: Thread, turns: Array<Turn>, pendingApprovals: Array<ApprovalRequestParams>, context?: ContextStatus | null, plan: Array<PlanStep>, sources: Array<SourceEntry>, followups: Array<string>, queued: Array<Array<UserInput>>, 
+/**
+ * The thread's rollout file (JSONL event log) on disk.
+ */
+rolloutPath?: string | null, };

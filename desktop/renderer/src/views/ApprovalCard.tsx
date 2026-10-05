@@ -15,6 +15,7 @@ function describe(p: ApprovalRequestParams): { title: string; detail: React.Reac
         readOnly: 'Read-only mode: this command may change files',
         sandboxUnavailable: 'The sandbox is unavailable, so this would run unsandboxed',
         sandboxFailure: 'The command failed inside the sandbox; retry without it?',
+        untrusted: 'Run this command? (approval policy: untrusted)',
       }
       return {
         title: why[a.reason] ?? 'Run command?',

@@ -9,14 +9,14 @@ Keep this file current. It is the resume point after a context reset.
 | M0 | Parity audit, monorepo skeleton, protocol crate with TS codegen, config loading, CI | **done**. CI workflow added in M3 (see below) |
 | M1 | vLLM client, tool parsing and fallbacks, resilience, Doctor, presets | **done** |
 | M2 | Engine core loop, tools, rollouts, app-server JSON-RPC, `exec` | **done** |
-| M3 | Electron shell, thread end to end, onboarding, Models & Endpoints | in progress |
-| M4 | Permissions/approvals UI, sandboxes, exec policy, hooks trust, project trust | engine **done**; UI pending |
-| M5 | Context engine tiers, recall, meter and view, soak test | engine + soak **done**; UI pending |
-| M6 | Git/worktrees/review/PR/undo, terminal, actions/environments | engine **done**; UI pending |
-| M7 | MCP client + settings, lazy tools, skills, plugins | engine **done**; UI pending |
-| M8 | Subagents, plan, goal, automations, memories, notifications, tray | engine **done**; UI pending |
-| M9 | Computer use, appshots, in-app browser, browser use | engine **done** (Notepad harness passes); UI pending |
-| M10 | Palette, shortcuts, multi-window, packaging, docs | packaging (NSIS + MSIX verified on Windows), CI, README, `docs/config.md`, `docs/vllm-setup.md` **done**; the rest pending |
+| M3 | Electron shell, thread end to end, onboarding, Models & Endpoints | **done** (onboarding, thread, composer, approvals e2e-tested) |
+| M4 | Permissions/approvals UI, sandboxes, exec policy, hooks trust, project trust | **done** (approval cards, `approval_policy`, project `.odex/rules`, Permissions settings, hooks review) |
+| M5 | Context engine tiers, recall, meter and view, soak test | **done** (meter ring, Context view, Context settings, `/compact` e2e) |
+| M6 | Git/worktrees/review/PR/undo, terminal, actions/environments | **done** (review pane, Git/PR panel, hand-off, terminal, project actions/environments editor) |
+| M7 | MCP client + settings, lazy tools, skills, plugins | **done** (MCP, Skills, Plugins, Hooks panels) |
+| M8 | Subagents, plan, goal, automations, memories, notifications, tray | **done** (plan approval, goal row, Automations + Activity, Memories) |
+| M9 | Computer use, appshots, in-app browser, browser use | **done** (Browser panel, browser + computer-use settings, agent browser e2e) |
+| M10 | Palette, shortcuts, multi-window, packaging, docs | **done** (palette, rebindable shortcuts, find, undo, pop-out windows, deep links, packaging, docs). Stretch goals not started |
 
 ## Engine crates
 
@@ -79,20 +79,24 @@ The suite has been verified against `odex-mock-vllm` with a rules file. It has *
 - `npm run dist:win` (in `desktop/`, after `cargo build --release -p odex-engine`) produces `desktop/release/Odex-Setup-<version>-x64.exe` (NSIS) and `Odex-<version>-x64.msix`.
 - To check a package, launch `release/win-unpacked/Odex.exe` with a temporary `ODEX_HOME`: the engine should start from `resources/bin` and a terminal should open (node-pty unpacked from the asar).
 
+## Desktop e2e coverage
+
+`desktop/e2e/` (70 tests, all passing on Windows): onboarding, thread end to end, approvals (exec escalation), plan mode, `/compact`, terminal, `!cmd`, edit and resend, find, project actions, undo, deep links, review pane (stage/revert/comment, hunks, big diffs, hand-off), files and editor, browser panel and agent browser use, MCP/skills/plugins/hooks, all settings panels with persistence, automations and Activity, and visual snapshots of home and thread in light and dark.
+
 ## Next
 
-1. Desktop (M3): Electron main (engine supervisor, windows, tray), preload bridge, React renderer (sidebar, thread view, composer, onboarding, Models & Endpoints, Doctor).
-2. CI workflow (`.github/workflows/ci.yml`): **added**. Engine and desktop jobs run on Windows, Ubuntu and macOS. Tags `v*` build installers on all three and attach them to a draft release. Not yet run on GitHub.
-3. Desktop UI for M4–M9 features, then Playwright e2e against `odex-mock-vllm`.
-4. Packaging: **added** (`desktop/electron-builder.yml`, `desktop/scripts/prepare-engine.mjs`). NSIS and MSIX are built and smoke-tested on Windows; dmg, AppImage and deb are configured but only built in CI. Docs: **added** (`README.md`, `docs/config.md`, `docs/vllm-setup.md`).
-5. Run the real-vLLM smoke suite and Doctor once a server is reachable, then mark the `vllm serve` commands in `docs/vllm-setup.md` as tested.
+1. Run the real-vLLM smoke suite and Doctor once a server is reachable, then mark the `vllm serve` commands in `docs/vllm-setup.md` as tested.
+2. Push to GitHub so CI runs for the first time (Linux/macOS sandbox, Electron and visual baselines have only run here on Windows), then commit the Linux and macOS baselines from the CI artifacts.
+3. Replace the packaging placeholders (MSIX identity, deb maintainer) and add signing secrets.
+4. Stretch goals (PROMPT §1): SSH remote projects, `/ide-context`, thread sections, permanent worktree projects.
 
 ## Known issues / gaps
 
-- The real vLLM endpoint provided for testing (`http://192.168.50.220:8080/v1`) has been unreachable from this machine since the session started (connect timeout, ping fails). Everything so far is tested against the mock. Re-run `odex-engine --base-url http://192.168.50.220:8080/v1 doctor` when it is reachable.
+- The real vLLM endpoint provided for testing (`http://192.168.50.220:8080/v1`) has been unreachable from this machine since the session started (connect timeout, ping fails). The machine is on the same LAN (192.168.50.40), but a full-tunnel VPN interface ("desktop", routes 0.0.0.0/1 + 128.0.0.0/1) captures the traffic, and ARP for the host is incomplete. Everything so far is tested against the mock. Re-run `odex-engine --base-url http://192.168.50.220:8080/v1 doctor` when it is reachable.
 - The restricted-token sandbox doesn't isolate the network (D-017). Some tools that spawn children inside the sandbox (e.g. node `child_process`) fail with EPERM; the engine offers a retry without the sandbox.
 - MCP OAuth tokens are stored in a JSON file in `~/.odex`, not via `safeStorage` (D-022).
 - Linux/macOS sandbox and computer-use paths are compile-checked only (no runtime test on this machine). CI is the first place they run: the Linux job installs bubblewrap and lifts Ubuntu's unprivileged-userns restriction for bwrap, headless Chrome and Electron.
-- Compaction with the **extractive fallback** can grow the context instead of shrinking it. Seen in the real-vLLM suite's dry run against the mock, whose compactor reply failed: 2810 → 3258 tokens, then 3976 of 4096. `summary::extractive` copies every summarized user message (up to 4,000 chars each) into `goal_and_requirements` and keeps accumulating across compactions. With a real compactor this path is only hit when structured output fails, but then long user messages can push a small window close to overflow.
+- Fixed: the extractive fallback summary could grow the context (it copied every user message, up to 4,000 chars each). It is now bounded (D-036) and covered by a unit test.
+- PR flows (create/view/comment) aren't e2e-tested: they need network and the `gh` CLI. OAuth sign-in for MCP HTTP servers isn't e2e-tested either (no OAuth test server).
 - `[notifications]` in config.toml is unused (the desktop keeps those settings in `desktop.json`), and so are `wire_api = "responses"`, `tool_call_format` and `tokenizer_path`. All are documented as reserved in `docs/config.md`.
 - MSIX on this machine (Windows 11 build 26300): electron-builder's downloaded `makeappx.exe` (both the default winCodeSign 2.6.0 bundle and the 26100 kits bundle) fails to start ("side-by-side configuration is incorrect", reported as `spawn UNKNOWN`). Building with `ELECTRON_BUILDER_WINDOWS_KITS_PATH="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64"` works, and CI sets this automatically when an SDK is installed. NSIS isn't affected.

@@ -1307,7 +1307,8 @@ pub async fn worktree_list(engine: &Engine) -> EResult<WorktreeListResponse> {
         .store
         .list_threads(&ThreadListParams { archived: None, limit: Some(5000), ..Default::default() })
         .map_err(EngineError::from)?;
-    Ok(WorktreeListResponse { worktrees: threads.into_iter().filter_map(|t| t.worktree).collect() })
+    let (worktrees, thread_ids) = threads.into_iter().filter_map(|t| t.worktree.map(|w| (w, t.id))).unzip();
+    Ok(WorktreeListResponse { worktrees, thread_ids })
 }
 
 pub async fn worktree_remove(engine: &Engine, p: ThreadIdParams) -> EResult<EmptyResponse> {

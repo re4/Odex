@@ -55,6 +55,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: 'copyDeepLink', label: 'Copy thread deep link', group: 'Threads', keys: 'Mod+Alt+L' },
   { id: 'copyThreadId', label: 'Copy thread id', group: 'Threads', keys: 'Mod+Alt+C' },
   { id: 'copyCwd', label: 'Copy working directory', group: 'Threads', keys: 'Mod+Shift+C' },
+  { id: 'undo', label: 'Undo last action (archive, pin, rename)', group: 'General', keys: 'Mod+Z' },
   { id: 'quit', label: 'Quit', group: 'General', keys: 'Mod+Q' },
   ...Array.from({ length: 9 }, (_, i) => ({ id: `goto${i + 1}`, label: `Go to thread ${i + 1}`, group: 'Navigation', keys: `Mod+${i + 1}` })),
 ]
@@ -109,6 +110,9 @@ export function bindings(): Record<string, string> {
   return out
 }
 
+/** Commands that never fire while typing in a text field. */
+const TEXT_KEYS = new Set(['undo'])
+
 /** Global key handler: maps key presses to command ids via `handlers`. */
 export function useShortcuts(handlers: Record<string, () => void>): void {
   useEffect(() => {
@@ -122,6 +126,8 @@ export function useShortcuts(handlers: Record<string, () => void>): void {
           const t = e.target as HTMLElement
           const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
           if (typing && !/Mod|Alt|Ctrl/.test(pressed) && pressed !== 'Escape' && pressed !== 'F11') continue
+          // text editing keeps its own undo
+          if (typing && TEXT_KEYS.has(id)) continue
           e.preventDefault()
           handlers[id]()
           return

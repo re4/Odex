@@ -115,7 +115,7 @@ export async function launch(opts: { mockUrl?: string; onboarded?: boolean; them
       ...process.env,
       ODEX_HOME: home,
       ODEX_USER_DATA: path.join(root, 'userdata'),
-      ODEX_ENGINE_PATH: binary('odex-engine'),
+      ODEX_ENGINE_PATH: process.env.ODEX_ENGINE_BIN || binary('odex-engine'),
       ODEX_E2E: '1',
       ODEX_LOG: 'warn',
     } as Record<string, string>,

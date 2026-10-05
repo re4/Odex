@@ -9,6 +9,7 @@ import {
   CircleX,
   Copy,
   FileText,
+  GitFork,
   Globe,
   Info,
   ListChecks,
@@ -23,7 +24,7 @@ import {
 import type { FileChange, ThreadItem, Turn } from '@shared/index'
 import { Markdown } from '@/components/Markdown'
 import { Identicon, basename, formatTokens } from '@/components/ui'
-import { useApp } from '@/store/app'
+import { isRunning, useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import * as A from '@/lib/actions'
 
@@ -146,12 +147,54 @@ function Collapsible({ icon, title, children, defaultOpen = false, right }: { ic
 function UserMessage({ item, turn, threadId }: { item: Extract<ThreadItem, { type: 'userMessage' }>; turn: Turn; threadId: string }) {
   const text = item.content.map((c) => (c.type === 'text' ? c.text : '')).join('\n')
   const extras = item.content.filter((c) => c.type !== 'text')
-  const editResend = async () => {
-    const edited = await A.promptText('Edit and resend (later turns are discarded)', text)
-    if (edited == null) return
-    await call('thread/rollback', { threadId, turnId: turn.id, restoreFiles: false })
-    await useApp.getState().loadThread(threadId)
-    await A.sendMessage(threadId, [{ type: 'text', text: edited }, ...extras])
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(text)
+  const [restoreFiles, setRestoreFiles] = useState(false)
+  const running = useApp((s) => isRunning(s.threads[threadId]?.thread))
+  const resend = async () => {
+    if (!draft.trim() && !extras.length) return
+    try {
+      if (running) await A.interrupt(threadId)
+      await call('thread/rollback', { threadId, turnId: turn.id, restoreFiles })
+      await useApp.getState().loadThread(threadId)
+      setEditing(false)
+      await A.sendMessage(threadId, [...(draft.trim() ? [{ type: 'text' as const, text: draft }] : []), ...extras])
+    } catch (e) {
+      toast(`Could not resend: ${(e as Error).message}`, 'error')
+    }
+  }
+  if (editing) {
+    return (
+      <div className="item-user">
+        <div className="col" style={{ width: '85%', gap: 6 }}>
+          <textarea
+            className="textarea"
+            style={{ minHeight: 70 }}
+            value={draft}
+            autoFocus
+            aria-label="Edit message"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setEditing(false)
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void resend()
+            }}
+          />
+          <div className="row xs">
+            <label className="checkbox">
+              <input type="checkbox" checked={restoreFiles} onChange={(e) => setRestoreFiles(e.target.checked)} /> Also undo file changes made since this message
+            </label>
+            <span className="spacer" />
+            <button className="btn btn-sm btn-ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+            <button className="btn btn-sm btn-primary" onClick={() => void resend()} title="Ctrl+Enter">
+              Resend
+            </button>
+          </div>
+          <div className="xs subtle">This message and everything after it will be replaced.</div>
+        </div>
+      </div>
+    )
   }
   return (
     <div className="item-user">
@@ -187,11 +230,19 @@ function UserMessage({ item, turn, threadId }: { item: Extract<ThreadItem, { typ
           <button className="icon-btn sm" title="Copy" aria-label="Copy message" onClick={() => A.copy(text)}>
             <Copy size={12} />
           </button>
-          <button className="icon-btn sm" title="Edit and resend" aria-label="Edit and resend" onClick={() => void editResend()}>
+          <button
+            className="icon-btn sm"
+            title="Edit and resend"
+            aria-label="Edit and resend"
+            onClick={() => {
+              setDraft(text)
+              setEditing(true)
+            }}
+          >
             <Pencil size={12} />
           </button>
           <button className="icon-btn sm" title="Fork from here" aria-label="Fork from here" onClick={() => void A.forkThread(threadId, turn.id)}>
-            <RotateCcw size={12} />
+            <GitFork size={12} />
           </button>
         </div>
       </div>
@@ -247,14 +298,19 @@ function SubagentCard({ item }: { item: Extract<ThreadItem, { type: 'subagent' }
 }
 
 function ProposedPlan({ item, threadId }: { item: Extract<ThreadItem, { type: 'proposedPlan' }>; threadId: string }) {
-  const decide = async (decision: string) => {
-    let markdown: string | undefined
-    if (decision === 'edit') {
-      const edited = await A.promptText('Edit the plan', item.markdown)
-      if (edited == null) return
-      markdown = edited
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(item.markdown)
+  const [busy, setBusy] = useState(false)
+  const decide = async (decision: 'approve' | 'edit' | 'reject') => {
+    setBusy(true)
+    try {
+      await call('thread/plan/decide', { threadId, itemId: item.id, decision, markdown: decision === 'edit' ? draft : undefined })
+      setEditing(false)
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      setBusy(false)
     }
-    await call('thread/plan/decide', { threadId, itemId: item.id, decision, markdown })
   }
   return (
     <div className="cell" style={{ borderColor: 'color-mix(in srgb, var(--accent) 45%, var(--border))' }}>
@@ -264,19 +320,36 @@ function ProposedPlan({ item, threadId }: { item: Extract<ThreadItem, { type: 'p
         {item.approved && <span className="badge success">approved</span>}
       </div>
       <div className="cell-body" style={{ padding: '10px 12px', maxHeight: 'none' }}>
-        <Markdown text={item.markdown} onOpenFile={openFileInPanel} />
+        {editing ? (
+          <textarea className="textarea mono" style={{ width: '100%', minHeight: 220 }} value={draft} onChange={(e) => setDraft(e.target.value)} aria-label="Edit plan" autoFocus />
+        ) : (
+          <Markdown text={item.markdown} onOpenFile={openFileInPanel} />
+        )}
       </div>
       {!item.approved && (
         <div className="approval-actions">
-          <button className="btn btn-primary btn-sm" onClick={() => void decide('approve')}>
-            Approve and run
-          </button>
-          <button className="btn btn-sm" onClick={() => void decide('edit')}>
-            Edit plan
-          </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => void decide('reject')}>
-            Dismiss
-          </button>
+          {editing ? (
+            <>
+              <button className="btn btn-primary btn-sm" disabled={busy || !draft.trim()} onClick={() => void decide('edit')}>
+                Run edited plan
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => (setEditing(false), setDraft(item.markdown))}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => void decide('approve')}>
+                Approve and run
+              </button>
+              <button className="btn btn-sm" onClick={() => setEditing(true)}>
+                Edit plan
+              </button>
+              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => void decide('reject')}>
+                Dismiss
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

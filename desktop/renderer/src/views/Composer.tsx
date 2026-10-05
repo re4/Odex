@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUp, Brain, ChevronDown, Cpu, FileText, FolderGit2, GitBranch, ListChecks, Monitor, Paperclip, Shield, Sparkles, Square, X } from 'lucide-react'
+import { ArrowUp, Brain, ChevronDown, Cpu, FileText, FolderGit2, GitBranch, ListChecks, MessageSquare, Monitor, Paperclip, Shield, Sparkles, Square, X } from 'lucide-react'
 import type { FileMatch, PermissionMode, ReasoningEffort, SkillInfo, UserInput } from '@shared/index'
 import { isRunning, useApp, type Attachment } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
@@ -21,6 +21,24 @@ const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i
 
 let attachSeq = 0
 const newId = () => `att_${Date.now().toString(36)}_${attachSeq++}`
+
+/** A compact summary of another thread, inserted when it is @-mentioned. */
+async function threadContext(id: string): Promise<string> {
+  const r = await call('thread/read', { threadId: id })
+  const name = r.thread.name || r.thread.preview || 'thread'
+  const lines: string[] = [`Context from the thread "${name}" (cwd ${r.thread.cwd}):`]
+  const msgs: string[] = []
+  for (const t of r.turns)
+    for (const i of t.items) {
+      if (i.type === 'userMessage') msgs.push(`User: ${i.content.map((c) => (c.type === 'text' ? c.text : '')).join(' ')}`)
+      if (i.type === 'agentMessage' && i.text.trim()) msgs.push(`Assistant: ${i.text}`)
+    }
+  // keep the first request and the latest exchanges, capped
+  const picked = msgs.length > 6 ? [msgs[0], '…', ...msgs.slice(-5)] : msgs
+  let text = lines.concat(picked).join('\n\n')
+  if (text.length > 6000) text = `${text.slice(0, 6000)}\n…(truncated)`
+  return text
+}
 
 function fileToDataUrl(f: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -244,24 +262,43 @@ export function Composer({ threadId, autoFocus = true, placeholder }: { threadId
         cancelled = true
       }
     }
-    // @ files
+    // @ files, folders and other threads
+    const threadItemsFor = (): MenuItem[] => {
+      if (!q) return []
+      const st = useApp.getState()
+      return st.threadOrder
+        .map((id) => st.threads[id]?.thread)
+        .filter((th) => th && th.id !== threadId && !th.archived && (th.name || th.preview || '').toLowerCase().includes(q))
+        .slice(0, 6)
+        .map((th) => ({
+          label: th!.name || th!.preview || 'Untitled thread',
+          hint: 'thread',
+          icon: <MessageSquare size={13} />,
+          onSelect: () => {
+            const name = th!.name || th!.preview || 'thread'
+            pick(`@${name.replace(/\s+/g, '-').slice(0, 40)}`)
+            void threadContext(th!.id).then((text) => setAttachments((a) => [...a, { id: newId(), label: `Thread: ${name}`, input: { type: 'text', text } }]))
+          },
+        }))
+    }
     if (!roots.length) {
-      setMentionItems([{ label: 'Choose a project to mention files', disabled: true }])
+      const threads = threadItemsFor()
+      setMentionItems(threads.length ? threads : [{ label: 'Choose a project to mention files', disabled: true }])
+      setMentionActive(0)
       return
     }
     const t = setTimeout(async () => {
       const r = await call('fs/search', { roots, query: mention.query, limit: 40 }).catch(() => ({ files: [] as FileMatch[] }))
       if (cancelled) return
-      setMentionItems(
-        r.files.map((m) => {
-          const rel = m.path.startsWith(m.root) ? m.path.slice(m.root.length).replace(/^[\\/]/, '') : m.path
-          return {
-            label: rel,
-            icon: <FileText size={13} />,
-            onSelect: () => pick(`@${rel}`, IMAGE_EXT.test(rel) ? { type: 'localImage', path: m.path } : { type: 'mention', path: m.path }, rel),
-          }
-        }),
-      )
+      const files = r.files.map<MenuItem>((m) => {
+        const { abs, rel } = A.matchPath(m)
+        return {
+          label: rel,
+          icon: <FileText size={13} />,
+          onSelect: () => pick(`@${rel}`, IMAGE_EXT.test(rel) ? { type: 'localImage', path: abs } : { type: 'mention', path: abs }, rel),
+        }
+      })
+      setMentionItems([...files, ...threadItemsFor()])
       setMentionActive(0)
     }, 60)
     return () => {
@@ -300,7 +337,8 @@ export function Composer({ threadId, autoFocus = true, placeholder }: { threadId
     }
   }
 
-  async function submit(steer = false) {
+  /** `invert` (Ctrl+Shift+Enter) flips the queue/steer setting for this message. */
+  async function submit(invert = false) {
     const text = draft.trim()
     if (!text && !attachments.length) return
     // slash command with args
@@ -314,12 +352,24 @@ export function Composer({ threadId, autoFocus = true, placeholder }: { threadId
         return
       }
     }
-    const input: UserInput[] = []
-    const inlineMentions = new Set<string>()
-    for (const a of attachments) {
-      if (a.input.type === 'mention' || a.input.type === 'skill') inlineMentions.add(a.label)
-      input.push(a.input)
+    // `!cmd` runs a user shell command in the thread (unsandboxed, shown in the thread)
+    if (text.startsWith('!') && text.length > 1 && !attachments.length) {
+      const command = text.slice(1).trim()
+      const id =
+        threadId ??
+        (await A.createThread({ projectId: ui.newThreadProjectId, runMode: 'local', model: homeModel ?? undefined, effort: homeEffort ?? undefined, permissionMode: homePerm }))
+      if (!id) return
+      setDraft('')
+      setMention(null)
+      try {
+        await call('thread/shellCommand', { threadId: id, command })
+      } catch (e) {
+        toast(`Command failed: ${(e as Error).message}`, 'error')
+      }
+      return
     }
+    const input: UserInput[] = []
+    for (const a of attachments) input.push(a.input)
     if (text) input.unshift({ type: 'text', text })
     setDraft('')
     setAttachments(() => [])
@@ -328,7 +378,8 @@ export function Composer({ threadId, autoFocus = true, placeholder }: { threadId
     const mode = planNext ? 'plan' : undefined
     setPlanNext(false)
     if (threadId) {
-      const behavior = steer ? 'steer' : (settings?.followUpBehavior ?? 'queue')
+      const pref = settings?.followUpBehavior ?? 'queue'
+      const behavior = invert ? (pref === 'steer' ? 'queue' : 'steer') : pref
       await A.sendMessage(threadId, input, { mode, steer: running && behavior === 'steer' })
       return
     }
@@ -599,7 +650,7 @@ export function Composer({ threadId, autoFocus = true, placeholder }: { threadId
               <Square size={12} fill="currentColor" />
             </button>
           ) : (
-            <button className="send-btn" aria-label="Send" title={running ? 'Queue (Enter) · Steer (Ctrl+Shift+Enter)' : 'Send (Enter)'} disabled={!canSend} onClick={() => void submit()}>
+            <button className="send-btn" aria-label="Send" title={running ? (settings?.followUpBehavior === 'steer' ? 'Steer (Enter) · Queue (Ctrl+Shift+Enter)' : 'Queue (Enter) · Steer (Ctrl+Shift+Enter)') : 'Send (Enter)'} disabled={!canSend} onClick={() => void submit()}>
               <ArrowUp size={16} />
             </button>
           )}

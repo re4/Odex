@@ -21,6 +21,7 @@ import { useApp } from '@/store/app'
 import * as A from '@/lib/actions'
 import { call } from '@/lib/rpc'
 import { Menu, MenuItem, relativeTime } from '@/components/ui'
+import { ProjectEditor } from '@/views/ProjectEditor'
 
 function StateIcon({ t }: { t: Thread }) {
   if (t.status === 'waitingApproval') return <CircleAlert size={13} color="var(--warning)" aria-label="Needs approval" />
@@ -44,6 +45,13 @@ export function threadMenu(t: Thread): MenuItem[] {
     { label: 'Copy deep link', onSelect: () => A.copy(`odex://threads/${t.id}`, 'Deep link copied') },
     { label: 'Copy thread id', onSelect: () => A.copy(t.id, 'Thread id copied') },
     { label: 'Copy working directory', onSelect: () => A.copy(t.cwd, 'Path copied') },
+    {
+      label: 'Copy rollout path',
+      onSelect: () =>
+        void call('thread/read', { threadId: t.id })
+          .then((r) => (r.rolloutPath ? A.copy(r.rolloutPath, 'Rollout path copied') : undefined))
+          .catch(() => {}),
+    },
     { label: 'Show working directory', onSelect: () => void window.odex.shell.openPath(t.cwd) },
     { separator: true, label: '' },
     { label: 'Archive', onSelect: () => void A.archiveThread(t.id), danger: true, hint: 'Ctrl+Shift+A' },
@@ -94,6 +102,7 @@ const ThreadRow = memo(function ThreadRow({ t, active }: { t: Thread; active: bo
 function ProjectSection({ p, threads, selected }: { p: Project; threads: Thread[]; selected: string | null }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [showAll, setShowAll] = useState(false)
+  const [editing, setEditing] = useState(false)
   const setUi = useApp((s) => s.setUi)
   const selectThread = useApp((s) => s.selectThread)
   const collapsed = p.collapsed
@@ -106,7 +115,7 @@ function ProjectSection({ p, threads, selected }: { p: Project; threads: Thread[
     { label: 'New thread', onSelect: newThread },
     { label: 'New thread in worktree', onSelect: () => (setUi({ newThreadProjectId: p.id, newThreadRunMode: 'worktree' }), void selectThread(null)) },
     { separator: true, label: '' },
-    { label: 'Edit project…', onSelect: () => A.openSettings(`project:${p.id}`) },
+    { label: 'Edit project…', onSelect: () => setEditing(true) },
     { label: 'Open in file manager', onSelect: () => void window.odex.shell.openPath(p.folders[p.primary] ?? p.folders[0]) },
     { label: p.trusted ? 'Untrust folder' : 'Trust folder', onSelect: () => void call('trust/set', { path: p.folders[p.primary] ?? p.folders[0], trusted: !p.trusted }) },
     { separator: true, label: '' },
@@ -161,11 +170,11 @@ function ProjectSection({ p, threads, selected }: { p: Project; threads: Thread[
         </div>
       )}
       {anchor && <Menu anchor={anchor} items={items} onClose={() => setAnchor(null)} />}
+      {editing && <ProjectEditor project={p} onClose={() => setEditing(false)} />}
     </div>
   )
 }
 
-// Project type lacks the derived field; keep a helper for clarity.
 export function Sidebar({ width }: { width: number }) {
   const threadsMap = useApp((s) => s.threads)
   const order = useApp((s) => s.threadOrder)
