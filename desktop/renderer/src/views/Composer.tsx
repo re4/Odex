@@ -1,0 +1,1079 @@
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  AppWindow,
+  ArrowUp,
+  Boxes,
+  Brain,
+  ChevronDown,
+  Cpu,
+  FileText,
+  Folder,
+  FolderGit2,
+  GitBranch,
+  GitBranchPlus,
+  ListChecks,
+  MessageSquare,
+  Monitor,
+  Paperclip,
+  Plug,
+  ScrollText,
+  Shield,
+  Sparkles,
+  Square,
+  SquareSlash,
+  X,
+} from 'lucide-react'
+import type { FileMatch, GitBranch as GitBranchInfo, McpPromptInfo, McpServerStatus, PermissionMode, ReasoningEffort, SkillInfo, UserInput, WindowInfo } from '@shared/index'
+import { isRunning, useApp, type Attachment } from '@/store/app'
+import { call, toast } from '@/lib/rpc'
+import * as A from '@/lib/actions'
+import { bindings, canon } from '@/lib/shortcuts'
+import { Menu, basename, formatTokens, type MenuItem } from '@/components/ui'
+import '@/styles/composer.css'
+
+const PERMISSION_LABEL: Record<PermissionMode, string> = {
+  'read-only': 'Read only',
+  auto: 'Auto',
+  'full-access': 'Full access',
+}
+const PERMISSION_HINT: Record<PermissionMode, string> = {
+  'read-only': 'Reads files; asks before any edit or command',
+  auto: 'Edits and runs commands in the workspace sandbox; asks for network and outside access',
+  'full-access': 'No sandbox and no approvals. Use with care.',
+}
+const EFFORT_LABEL: Record<ReasoningEffort, string> = { none: 'None', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high' }
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i
+/** Absolute Windows (`C:\`, UNC) or POSIX path. */
+const ABS_PATH = /^([a-zA-Z]:[\\/]|\\\\|\/)/
+/** `baseBranch` value the engine maps to "current branch plus uncommitted changes". */
+const CURRENT_WITH_CHANGES = 'current-with-changes'
+/** Per-group caps in the `@` menu. */
+const LIMIT = { files: 10, folders: 6, skills: 6, resources: 6, prompts: 6, apps: 6, threads: 5 }
+
+let attachSeq = 0
+const newId = () => `att_${Date.now().toString(36)}_${attachSeq++}`
+
+/** A compact summary of another thread, inserted when it is @-mentioned. */
+async function threadContext(id: string): Promise<string> {
+  const r = await call('thread/read', { threadId: id })
+  const name = r.thread.name || r.thread.preview || 'thread'
+  const lines: string[] = [`Context from the thread "${name}" (cwd ${r.thread.cwd}):`]
+  const msgs: string[] = []
+  for (const t of r.turns)
+    for (const i of t.items) {
+      if (i.type === 'userMessage') msgs.push(`User: ${i.content.map((c) => (c.type === 'text' ? c.text : '')).join(' ')}`)
+      if (i.type === 'agentMessage' && i.text.trim()) msgs.push(`Assistant: ${i.text}`)
+    }
+  // keep the first request and the latest exchanges, capped
+  const picked = msgs.length > 6 ? [msgs[0], '…', ...msgs.slice(-5)] : msgs
+  let text = lines.concat(picked).join('\n\n')
+  if (text.length > 6000) text = `${text.slice(0, 6000)}\n…(truncated)`
+  return text
+}
+
+function fileToDataUrl(f: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result))
+    r.onerror = () => reject(r.error)
+    r.readAsDataURL(f)
+  })
+}
+
+/** Folders (ancestors of the file matches) that fit the query, best first. */
+function folderMatches(files: FileMatch[], query: string): Array<{ rel: string; abs: string }> {
+  const q = query.toLowerCase().replace(/\\/g, '/')
+  const found = new Map<string, { rel: string; abs: string; score: number }>()
+  for (const m of files) {
+    const parts = A.matchPath(m).rel.split(/[\\/]/)
+    for (let i = 1; i < parts.length; i++) {
+      const rel = parts.slice(0, i).join('/')
+      const key = `${m.root}|${rel}`
+      if (found.has(key)) continue
+      const base = parts[i - 1].toLowerCase()
+      let score: number
+      if (!q) {
+        if (i > 1) continue
+        score = 0
+      } else if (base.startsWith(q)) score = 3
+      else if (base.includes(q)) score = 2
+      else if (`${rel.toLowerCase()}/`.includes(q)) score = 1
+      else continue
+      found.set(key, { rel, abs: A.matchPath({ path: rel, root: m.root }).abs, score })
+    }
+  }
+  return [...found.values()].sort((a, b) => b.score - a.score || a.rel.length - b.rel.length).slice(0, LIMIT.folders)
+}
+
+/** Concatenate menu groups, each under a header; empty groups are dropped. */
+function grouped(groups: Array<[string, MenuItem[]]>): MenuItem[] {
+  const out: MenuItem[] = []
+  for (const [title, items] of groups) if (items.length) out.push({ label: title, header: true }, ...items)
+  return out
+}
+
+const appLabel = (w: WindowInfo) => w.app.replace(/\.exe$/i, '')
+
+/** Ring showing how full the context window is. */
+export function ContextRing({ threadId }: { threadId: string }) {
+  const ctx = useApp((s) => s.threads[threadId]?.context)
+  const setUi = useApp((s) => s.setUi)
+  if (!ctx) return null
+  const pct = Math.min(1, ctx.used / Math.max(1, ctx.window))
+  const ofBudget = ctx.used / Math.max(1, ctx.budget)
+  const color = ofBudget >= ctx.compactAt ? 'var(--danger)' : ofBudget >= ctx.pruneAt ? 'var(--warning)' : 'var(--accent)'
+  const r = 8
+  const c = 2 * Math.PI * r
+  const b = ctx.breakdown
+  const rows: Array<[string, number]> = [
+    ['System', b.system],
+    ['Tools', b.tools],
+    ['AGENTS.md', b.agentsMd],
+    ['Memories', b.memories],
+    ['Summary', b.summary],
+    ['Pinned', b.pinned],
+    ['History', b.history],
+    ['Tool output', b.toolOutputs],
+    ['Images', b.images],
+  ]
+  return (
+    <button className="ctx-ring" aria-label={`Context ${Math.round(pct * 100)}% used`} onClick={() => setUi({ contextViewOpen: true })} style={{ background: 'none', border: 'none', padding: 0 }}>
+      <svg width="22" height="22" viewBox="0 0 22 22">
+        <circle cx="11" cy="11" r={r} fill="none" stroke="var(--border-strong)" strokeWidth="2.5" />
+        <circle cx="11" cy="11" r={r} fill="none" stroke={color} strokeWidth="2.5" strokeDasharray={`${c * pct} ${c}`} strokeLinecap="round" />
+      </svg>
+      <div className="ctx-tip" role="tooltip">
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>
+          Context {Math.round(pct * 100)}% · {formatTokens(ctx.used)} / {formatTokens(ctx.window)}
+          {ctx.exact ? '' : ' (est.)'}
+        </div>
+        {rows
+          .filter(([, v]) => v > 0)
+          .map(([k, v]) => (
+            <div key={k} className="row" style={{ justifyContent: 'space-between' }}>
+              <span className="muted">{k}</span>
+              <span>{formatTokens(v)}</span>
+            </div>
+          ))}
+        <div className="subtle" style={{ marginTop: 4 }}>
+          {ctx.compactions.length} compaction(s) · {ctx.prunes} prune(s) · {ctx.model ?? ''}
+        </div>
+        <div className="subtle">Click for details</div>
+      </div>
+    </button>
+  )
+}
+
+interface MentionState {
+  kind: '@' | '$' | '/'
+  start: number
+  query: string
+}
+
+function AttachmentIcon({ a }: { a: Attachment }) {
+  if (a.preview) return <img src={a.preview} alt="" />
+  if (a.kind === 'folder') return <Folder size={12} />
+  if (a.kind === 'thread') return <MessageSquare size={12} />
+  if (a.kind === 'computer' || a.input.type === 'appshot') return <Monitor size={12} />
+  if (a.kind === 'mcpResource' || a.input.type === 'mcpResource') return <Plug size={12} />
+  if (a.input.type === 'skill') return <Sparkles size={12} />
+  return <FileText size={12} />
+}
+
+export function Composer({ threadId, autoFocus = true, placeholder }: { threadId: string | null; autoFocus?: boolean; placeholder?: string }) {
+  const ts = useApp((s) => (threadId ? s.threads[threadId] : undefined))
+  const settings = useApp((s) => s.settings)
+  const models = useApp((s) => s.models)
+  const roles = useApp((s) => s.roles)
+  const projects = useApp((s) => s.projects)
+  const ui = useApp((s) => s.ui)
+  const setUi = useApp((s) => s.setUi)
+
+  // Home composer state (no thread yet)
+  const [homeDraft, setHomeDraft] = useState('')
+  const [homeAtt, setHomeAtt] = useState<Attachment[]>([])
+  const [homeModel, setHomeModel] = useState<string | null>(null)
+  const [homeEffort, setHomeEffort] = useState<ReasoningEffort | null>(null)
+  const [homePerm, setHomePerm] = useState<PermissionMode>('auto')
+  /** Worktree base branch; null = the current branch. */
+  const [homeBranch, setHomeBranch] = useState<string | null>(null)
+  const [homeEnv, setHomeEnv] = useState<string | null>(null)
+  const [branches, setBranches] = useState<GitBranchInfo[]>([])
+  const [planNext, setPlanNext] = useState(false)
+
+  const draft = threadId ? (ts?.draft ?? '') : homeDraft
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  const attachments = threadId ? (ts?.attachments ?? []) : homeAtt
+  const setDraft = useCallback(
+    (v: string) => {
+      draftRef.current = v
+      if (threadId) useApp.getState().patchThread(threadId, { draft: v })
+      else setHomeDraft(v)
+    },
+    [threadId],
+  )
+  const setAttachments = useCallback(
+    (f: (a: Attachment[]) => Attachment[]) => {
+      if (threadId) {
+        const cur = useApp.getState().threads[threadId]?.attachments ?? []
+        useApp.getState().patchThread(threadId, { attachments: f(cur) })
+      } else setHomeAtt(f)
+    },
+    [threadId],
+  )
+
+  const thread = ts?.thread
+  const running = isRunning(thread)
+  const modelKey = thread?.model ?? homeModel ?? roles.main ?? models[0]?.key ?? null
+  const model = models.find((m) => m.key === modelKey)
+  const effort = (thread ? thread.effort : homeEffort) ?? model?.defaultEffort ?? null
+  const perm: PermissionMode = thread?.permissionMode ?? homePerm
+  const project = projects.find((p) => p.id === (thread ? thread.projectId : ui.newThreadProjectId))
+  const ta = useRef<HTMLTextAreaElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [menuPlace, setMenuPlace] = useState<{ below: boolean; maxHeight: number } | null>(null)
+  const [mention, setMention] = useState<MentionState | null>(null)
+  // the live token: suggestions shown while new ones load must still replace the current token
+  const mentionRef = useRef(mention)
+  mentionRef.current = mention
+  const [mentionItems, setMentionItems] = useState<MenuItem[]>([])
+  const [mentionActive, setMentionActive] = useState(0)
+  const [picker, setPicker] = useState<{ kind: string; anchor: HTMLElement } | null>(null)
+  const [dragOver, setDragOver] = useState(false)
+  const historyPos = useRef(-1)
+  const chipRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  // caches for the completion menus (per project / refreshed every few seconds)
+  const skillCache = useRef<{ key: string; list: SkillInfo[] } | null>(null)
+  const mcpCache = useRef<McpServerStatus[] | null>(null)
+  const cuCache = useRef<{ at: number; enabled: boolean; windows: WindowInfo[] } | null>(null)
+
+  // new-thread options: worktree base branch and environment
+  const homeRunMode = project?.isGit ? ui.newThreadRunMode : 'local'
+  const branchCwd = !threadId && project?.isGit && homeRunMode === 'worktree' ? (project.folders[project.primary] ?? project.folders[0] ?? null) : null
+  const envs = useMemo(() => (!threadId ? (project?.environments ?? []) : []), [threadId, project])
+  const defaultEnvId = envs.find((e) => e.id === project?.defaultEnvironment)?.id ?? envs[0]?.id ?? null
+  // '' = no environment (the engine skips its setup script and variables)
+  const envId = homeEnv === '' ? '' : (envs.find((e) => e.id === homeEnv)?.id ?? defaultEnvId)
+  const currentBranch = branches.find((b) => b.current)?.name ?? null
+
+  useEffect(() => {
+    if (autoFocus) ta.current?.focus()
+  }, [threadId, autoFocus])
+
+  // auto-grow
+  useEffect(() => {
+    const el = ta.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, window.innerHeight * 0.4)}px`
+  }, [draft])
+
+  // branches for the worktree base-branch chip
+  useEffect(() => {
+    setHomeBranch(null)
+    if (!branchCwd) {
+      setBranches([])
+      return
+    }
+    let off = false
+    call('git/branches', { cwd: branchCwd })
+      .then((r) => !off && setBranches(r.branches))
+      .catch(() => !off && setBranches([]))
+    return () => {
+      off = true
+    }
+  }, [branchCwd])
+
+  // external attachments (appshots, browser comments, review comments, files from panels)
+  useEffect(() => {
+    const onAttach = (e: Event) => {
+      const d = (e as CustomEvent).detail
+      if (useApp.getState().selectedThreadId !== threadId) return
+      if (d.type === 'appshot') {
+        setAttachments((a) => [...a, { id: newId(), label: d.title || 'Appshot', preview: d.imageUrl, input: { type: 'appshot', title: d.title, app: d.app ?? null, image_url: d.imageUrl, ui_tree: d.uiTree ?? null } }])
+      } else if (d.type === 'browserComment') {
+        setAttachments((a) => [...a, { id: newId(), label: `Comment: ${d.comment.slice(0, 40)}`, preview: d.screenshotUrl, input: { type: 'browserComment', url: d.url, selector: d.selector, bounds: d.bounds, comment: d.comment, screenshot_url: d.screenshotUrl } }])
+      } else if (d.type === 'file') {
+        setAttachments((a) => [...a, { id: newId(), label: basename(d.path), input: IMAGE_EXT.test(d.path) ? { type: 'localImage', path: d.path } : { type: 'mention', path: d.path } }])
+      } else if (d.type === 'text') {
+        setDraft(draftRef.current + d.text)
+      }
+      ta.current?.focus()
+    }
+    const onPicker = (e: Event) => {
+      const kind = (e as CustomEvent).detail as string
+      const anchor = chipRefs.current[kind] ?? ta.current
+      if (anchor) setPicker({ kind, anchor })
+    }
+    // `/plan` without a task (from anywhere): plan the next message
+    const onPlanMode = (e: Event) => {
+      if (useApp.getState().selectedThreadId !== threadId) return
+      const d = (e as CustomEvent).detail as { on?: boolean } | null | undefined
+      setPlanNext(d?.on ?? true)
+      ta.current?.focus()
+    }
+    window.addEventListener('odex:attach', onAttach)
+    window.addEventListener('odex:open-picker', onPicker)
+    window.addEventListener('odex:plan-mode', onPlanMode)
+    return () => {
+      window.removeEventListener('odex:attach', onAttach)
+      window.removeEventListener('odex:open-picker', onPicker)
+      window.removeEventListener('odex:plan-mode', onPlanMode)
+    }
+  }, [threadId, setAttachments, setDraft])
+
+  const roots = useMemo(() => {
+    if (thread) return [thread.worktree?.path ?? thread.cwd]
+    return project?.folders ?? []
+  }, [thread, project])
+
+  const selectable = useMemo(() => mentionItems.map((it, i) => (it.header || it.separator || it.disabled ? -1 : i)).filter((i) => i >= 0), [mentionItems])
+  const showItems = useCallback((items: MenuItem[]) => {
+    setMentionItems(items)
+    setMentionActive(items.findIndex((it) => !it.header && !it.separator && !it.disabled))
+  }, [])
+
+  // open the suggestions above the composer, or below when there's more room there (home view),
+  // sized to the visible area of the clipping ancestors
+  const menuOpen = !!mention && mentionItems.length > 0
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current
+    if (!menuOpen || !wrap) return
+    const r = wrap.getBoundingClientRect()
+    let top = 0
+    let bottom = window.innerHeight
+    for (let el = wrap.parentElement; el; el = el.parentElement) {
+      const cs = getComputedStyle(el)
+      if (/(auto|scroll|hidden|clip)/.test(`${cs.overflowY} ${cs.overflow}`)) {
+        const pr = el.getBoundingClientRect()
+        top = Math.max(top, pr.top)
+        bottom = Math.min(bottom, pr.bottom)
+      }
+    }
+    const above = r.top - top - 10
+    const below = bottom - r.bottom - 10
+    const place = above >= 220 || above >= below ? { below: false, maxHeight: Math.max(120, Math.min(360, above)) } : { below: true, maxHeight: Math.max(120, Math.min(360, below)) }
+    setMenuPlace((p) => (p && p.below === place.below && p.maxHeight === place.maxHeight ? p : place))
+  }, [menuOpen])
+
+  // keep the active suggestion visible while navigating with the keyboard
+  useEffect(() => {
+    menuRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' })
+  }, [mentionActive, mentionItems])
+
+  function focusAt(pos: number) {
+    requestAnimationFrame(() => {
+      const el = ta.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(pos, pos)
+    })
+  }
+
+  /** Replace `[start, end)` of the current draft with `insert` + a space and put the caret after it. */
+  function replaceRange(start: number, end: number, insert: string) {
+    const cur = draftRef.current
+    const before = cur.slice(0, start)
+    const after = cur.slice(end)
+    const sep = after.startsWith(' ') ? '' : ' '
+    setDraft(`${before}${insert}${sep}${after}`)
+    focusAt(before.length + insert.length + 1)
+  }
+
+  /** The draft without the `/word` token at `[start, end)`. */
+  function withoutToken(start: number, end: number): string {
+    const cur = draftRef.current
+    const before = cur.slice(0, start)
+    const after = cur.slice(end)
+    return before + (before === '' || /\s$/.test(before) ? after.replace(/^[ \t]/, '') : after)
+  }
+
+  async function loadSkills(): Promise<SkillInfo[]> {
+    const key = roots[0] ?? ''
+    if (skillCache.current?.key === key) return skillCache.current.list
+    const list = (await call('skills/list', { cwd: roots[0] ?? null }).catch(() => ({ skills: [] as SkillInfo[] }))).skills
+    skillCache.current = { key, list }
+    return list
+  }
+
+  async function loadMcp(): Promise<McpServerStatus[]> {
+    let list = useApp.getState().mcp
+    if (!list.length) {
+      if (!mcpCache.current) mcpCache.current = (await call('mcp/list', {}).catch(() => ({ servers: [] as McpServerStatus[] }))).servers
+      list = mcpCache.current
+    }
+    return list.filter((s) => s.enabled && s.state === 'ready')
+  }
+
+  async function loadComputer(): Promise<{ enabled: boolean; windows: WindowInfo[] }> {
+    const c = cuCache.current
+    if (c && Date.now() - c.at < 15_000) return c
+    const st = await call('computerUse/status', {}).catch(() => null)
+    const enabled = !!st?.supported && !!st.enabled && !st.killed
+    const windows = enabled ? (await call('computerUse/windows', {}).catch(() => ({ windows: [] as WindowInfo[] }))).windows : []
+    cuCache.current = { at: Date.now(), enabled, windows }
+    return cuCache.current
+  }
+
+  /** A slash command picked from the `/` menu (the token may be anywhere in the draft). */
+  function runSlashFromMenu(c: A.SlashCommand, start: number, end: number) {
+    setMention(null)
+    const atStart = !draftRef.current.slice(0, start).trim()
+    if (c.name === 'plan') {
+      // plan mode for the next message; the rest of the draft becomes the task
+      const next = withoutToken(start, end)
+      setDraft(next)
+      setPlanNext(true)
+      focusAt(Math.min(start, next.length))
+      return
+    }
+    if (c.args && atStart) {
+      // let the user type the argument
+      replaceRange(start, end, `/${c.name}`)
+      return
+    }
+    if (c.args?.startsWith('<')) {
+      // required argument mid-draft: the rest of the draft becomes the argument
+      const next = `/${c.name} ${withoutToken(start, end).trim()}`
+      setDraft(next)
+      focusAt(next.length)
+      return
+    }
+    const next = withoutToken(start, end)
+    setDraft(next)
+    focusAt(Math.min(start, next.length))
+    void c.run(threadId, '')
+  }
+
+  /** Fetch an MCP prompt (asking for its arguments) and insert its text in place of the `@` token. */
+  async function insertMcpPrompt(server: string, p: McpPromptInfo, start: number, end: number) {
+    setMention(null)
+    const args: Record<string, string> = {}
+    for (const a of p.arguments ?? []) {
+      const v = await A.promptText(`${p.name}: ${a.description || a.name}${a.required ? '' : ' (optional)'}`)
+      if (v == null) {
+        ta.current?.focus()
+        return
+      }
+      if (v.trim()) args[a.name] = v.trim()
+    }
+    try {
+      const r = await call('mcp/getPrompt', { server, name: p.name, arguments: Object.keys(args).length ? args : null })
+      replaceRange(start, end, r.text.trim() || p.name)
+    } catch (e) {
+      toast(`Could not load the prompt ${p.name}: ${(e as Error).message}`, 'error')
+    }
+  }
+
+  // mention/slash/skill completion
+  useEffect(() => {
+    if (!mention) return
+    let cancelled = false
+    const q = mention.query.toLowerCase()
+    const tokenStart = () => (mentionRef.current ?? mention).start
+    const tokenEnd = () => {
+      const m = mentionRef.current ?? mention
+      return ta.current?.selectionStart ?? m.start + m.query.length + 1
+    }
+    const pick = (insert: string, input?: UserInput, label?: string, kind?: Attachment['kind']) => {
+      if (input) setAttachments((a) => [...a, { id: newId(), label: label ?? insert, input, kind }])
+      const start = tokenStart()
+      const end = tokenEnd()
+      setMention(null)
+      replaceRange(start, end, insert)
+    }
+    const skillItems = (list: SkillInfo[]): MenuItem[] =>
+      list
+        .filter((s) => s.enabled && s.name.toLowerCase().includes(q))
+        .slice(0, mention.kind === '$' ? 30 : LIMIT.skills)
+        .map((s) => ({ label: `$${s.name}`, hint: s.description, icon: <Sparkles size={13} />, onSelect: () => pick(`$${s.name}`, { type: 'skill', name: s.name }, s.name) }))
+
+    if (mention.kind === '/') {
+      const commands = A.SLASH_COMMANDS.filter((c) => c.name.startsWith(q)).map<MenuItem>((c) => ({
+        label: `/${c.name}${c.args ? ` ${c.args}` : ''}`,
+        hint: c.description,
+        icon: <SquareSlash size={13} />,
+        onSelect: () => runSlashFromMenu(c, tokenStart(), tokenEnd()),
+      }))
+      const cached = skillCache.current?.key === (roots[0] ?? '') ? skillCache.current.list : null
+      showItems(grouped([['Commands', commands], ['Skills', skillItems(cached ?? [])]]))
+      if (!cached)
+        void loadSkills().then((list) => {
+          if (!cancelled && list.length) showItems(grouped([['Commands', commands], ['Skills', skillItems(list)]]))
+        })
+      return () => {
+        cancelled = true
+      }
+    }
+    if (mention.kind === '$') {
+      void loadSkills().then((list) => !cancelled && showItems(skillItems(list)))
+      return () => {
+        cancelled = true
+      }
+    }
+    // @ files, folders, skills, MCP resources and prompts, apps, other threads
+    const threadItems = (): MenuItem[] => {
+      if (!q) return []
+      const st = useApp.getState()
+      return st.threadOrder
+        .map((id) => st.threads[id]?.thread)
+        .filter((th) => th && th.id !== threadId && !th.archived && (th.name || th.preview || '').toLowerCase().includes(q))
+        .slice(0, LIMIT.threads)
+        .map((th) => ({
+          label: th!.name || th!.preview || 'Untitled thread',
+          hint: 'thread',
+          icon: <MessageSquare size={13} />,
+          onSelect: () => {
+            const name = th!.name || th!.preview || 'thread'
+            pick(`@${name.replace(/\s+/g, '-').slice(0, 40)}`)
+            void threadContext(th!.id).then((text) => setAttachments((a) => [...a, { id: newId(), label: `Thread: ${name}`, kind: 'thread', input: { type: 'text', text } }]))
+          },
+        }))
+    }
+    const t = setTimeout(async () => {
+      const [files, skills, servers, cu] = await Promise.all([
+        roots.length ? call('fs/search', { roots, query: mention.query, limit: 40 }).then((r) => r.files, () => [] as FileMatch[]) : Promise.resolve([] as FileMatch[]),
+        loadSkills(),
+        loadMcp(),
+        loadComputer(),
+      ])
+      if (cancelled) return
+      const fileItems = files.slice(0, LIMIT.files).map<MenuItem>((m) => {
+        const { abs, rel } = A.matchPath(m)
+        return {
+          label: rel,
+          icon: <FileText size={13} />,
+          onSelect: () => pick(`@${rel}`, IMAGE_EXT.test(rel) ? { type: 'localImage', path: abs } : { type: 'mention', path: abs }, rel),
+        }
+      })
+      const folderItems = folderMatches(files, mention.query).map<MenuItem>((f) => ({
+        label: `${f.rel}/`,
+        icon: <Folder size={13} />,
+        onSelect: () => pick(`@${f.rel}/`, { type: 'mention', path: f.abs }, `${f.rel}/`, 'folder'),
+      }))
+      const resourceItems: MenuItem[] = []
+      const promptItems: MenuItem[] = []
+      for (const s of servers) {
+        for (const r of s.resources)
+          if (`${r.name} ${r.uri}`.toLowerCase().includes(q))
+            resourceItems.push({
+              label: r.name || r.uri,
+              hint: `${s.name} · ${r.uri}`,
+              icon: <Plug size={13} />,
+              onSelect: () => pick(`@${s.name}:${(r.name || r.uri).replace(/\s+/g, '-')}`, { type: 'mcpResource', server: s.name, uri: r.uri }, `${s.name}: ${r.name || r.uri}`, 'mcpResource'),
+            })
+        for (const p of s.prompts)
+          if (p.name.toLowerCase().includes(q))
+            promptItems.push({
+              label: p.name,
+              hint: `${s.name}${p.description ? ` · ${p.description}` : ''}`,
+              icon: <ScrollText size={13} />,
+              onSelect: () => void insertMcpPrompt(s.name, p, tokenStart(), tokenEnd()),
+            })
+      }
+      const appItems: MenuItem[] = []
+      if (cu.enabled) {
+        if ('computer'.includes(q))
+          appItems.push({
+            label: '@Computer',
+            hint: 'Let the agent operate desktop apps',
+            icon: <Monitor size={13} />,
+            onSelect: () =>
+              pick('@Computer', { type: 'text', text: 'Use computer use for this request: operate desktop apps with the computer-use tools (window op=list, screenshot, ui_tree, ui_action, keyboard, mouse).' }, 'Computer use', 'computer'),
+          })
+        const seen = new Set<string>()
+        for (const w of cu.windows) {
+          const name = appLabel(w)
+          if (!name || seen.has(name.toLowerCase()) || /^odex$/i.test(name)) continue
+          if (!`${name} ${w.title}`.toLowerCase().includes(q)) continue
+          seen.add(name.toLowerCase())
+          appItems.push({
+            label: `@${name}`,
+            hint: w.title,
+            icon: <AppWindow size={13} />,
+            onSelect: () =>
+              pick(
+                `@${name.replace(/\s+/g, '-')}`,
+                { type: 'text', text: `Use computer use on ${name} (window "${w.title}", app ${w.app}): pass window="${w.app}" to the computer-use tools (screenshot, ui_tree, ui_action, keyboard, mouse).` },
+                `Computer: ${name}`,
+                'computer',
+              ),
+          })
+        }
+      }
+      const items = grouped([
+        ['Files', fileItems],
+        ['Folders', folderItems],
+        ['Skills', skillItems(skills)],
+        ['MCP resources', resourceItems.slice(0, LIMIT.resources)],
+        ['MCP prompts', promptItems.slice(0, LIMIT.prompts)],
+        ['Computer use', appItems.slice(0, LIMIT.apps + 1)],
+        ['Threads', threadItems()],
+      ])
+      showItems(items.length || roots.length ? items : [{ label: 'Choose a project to mention files', disabled: true }])
+    }, 60)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mention?.kind, mention?.query, mention?.start, roots])
+
+  function detectMention(value: string, caret: number) {
+    const upto = value.slice(0, caret)
+    // `/command` at the start of a line or after whitespace (not inside paths like src/foo)
+    const s = /(^|\s)\/([\w-]*)$/.exec(upto)
+    if (s) {
+      setMention({ kind: '/', start: upto.length - s[2].length - 1, query: s[2] })
+      return
+    }
+    const m = /(^|\s)([@$])([^\s@$]*)$/.exec(upto)
+    if (m) setMention({ kind: m[2] as '@' | '$', start: upto.length - m[3].length - 1, query: m[3] })
+    else setMention(null)
+  }
+
+  function attachPath(p: string) {
+    setAttachments((a) => [...a, { id: newId(), label: basename(p.replace(/[\\/]+$/, '')), input: IMAGE_EXT.test(p) ? { type: 'localImage', path: p } : { type: 'mention', path: p } }])
+  }
+
+  async function addFiles(files: File[] | string[]) {
+    for (const f of files) {
+      if (typeof f === 'string') {
+        setAttachments((a) => [...a, { id: newId(), label: basename(f), input: IMAGE_EXT.test(f) ? { type: 'localImage', path: f } : { type: 'file', path: f, name: basename(f) } }])
+        continue
+      }
+      // Electron 32+ removed File.path; the preload resolves it ('' for in-memory files)
+      const p = window.odex.fs.pathForFile(f)
+      if (f.type.startsWith('image/')) {
+        const url = await fileToDataUrl(f)
+        setAttachments((a) => [...a, { id: newId(), label: f.name || 'image', preview: url, input: p ? { type: 'localImage', path: p } : { type: 'image', url, name: f.name } }])
+      } else if (p) {
+        setAttachments((a) => [...a, { id: newId(), label: f.name || basename(p), input: { type: 'file', path: p, name: f.name || basename(p) } }])
+      } else {
+        toast(`Can't attach ${f.name || 'this item'}: it has no file path`, 'error')
+      }
+    }
+  }
+
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragOver(false)
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length) {
+      void addFiles(files)
+      return
+    }
+    // drags from the in-app Files tree carry the absolute path as text
+    const text = e.dataTransfer.getData('application/x-odex-path') || e.dataTransfer.getData('text/plain')
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+    if (lines.length && lines.every((l) => ABS_PATH.test(l))) {
+      lines.forEach(attachPath)
+      ta.current?.focus()
+    } else if (text) {
+      const at = ta.current?.selectionStart ?? draft.length
+      setDraft(draft.slice(0, at) + text + draft.slice(at))
+      focusAt(at + text.length)
+    }
+  }
+
+  async function startHomeThread(): Promise<string | null> {
+    try {
+      const r = await call('thread/start', {
+        projectId: ui.newThreadProjectId ?? undefined,
+        runMode: homeRunMode,
+        model: homeModel ?? undefined,
+        effort: homeEffort ?? undefined,
+        permissionMode: homePerm,
+        baseBranch: homeRunMode === 'worktree' ? (homeBranch ?? undefined) : undefined,
+        environmentId: envId ?? undefined,
+      })
+      const s = useApp.getState()
+      s.applyNotification('thread/started', { thread: r.thread })
+      await s.selectThread(r.thread.id)
+      return r.thread.id
+    } catch (e) {
+      toast(`Could not start a thread: ${(e as Error).message}`, 'error')
+      return null
+    }
+  }
+
+  /** `invert` (Ctrl+Shift+Enter) flips the queue/steer setting for this message. */
+  async function submit(invert = false) {
+    let text = draft.trim()
+    if (!text && !attachments.length) return
+    let forcePlan = false
+    // slash command with args
+    const slash = /^\/([\w-]+)(?:\s+([\s\S]*))?$/.exec(text)
+    if (slash?.[1] === 'plan') {
+      // `/plan` alone turns on plan mode for the next message; `/plan <task>` sends the task in plan mode
+      const task = (slash[2] ?? '').trim()
+      setMention(null)
+      if (!task) {
+        setDraft('')
+        setPlanNext(true)
+        return
+      }
+      text = task
+      forcePlan = true
+    } else if (slash && !attachments.length) {
+      const cmd = A.SLASH_COMMANDS.find((c) => c.name === slash[1])
+      if (cmd) {
+        setDraft('')
+        setMention(null)
+        await cmd.run(threadId, slash[2] ?? '')
+        return
+      }
+    }
+    // `!cmd` runs a user shell command in the thread (unsandboxed, shown in the thread)
+    if (text.startsWith('!') && text.length > 1 && !attachments.length && !forcePlan) {
+      const command = text.slice(1).trim()
+      const id =
+        threadId ??
+        (await A.createThread({ projectId: ui.newThreadProjectId, runMode: 'local', model: homeModel ?? undefined, effort: homeEffort ?? undefined, permissionMode: homePerm }))
+      if (!id) return
+      setDraft('')
+      setMention(null)
+      try {
+        await call('thread/shellCommand', { threadId: id, command })
+      } catch (e) {
+        toast(`Command failed: ${(e as Error).message}`, 'error')
+      }
+      return
+    }
+    const input: UserInput[] = []
+    for (const a of attachments) input.push(a.input)
+    if (text) input.unshift({ type: 'text', text })
+    setDraft('')
+    setAttachments(() => [])
+    setMention(null)
+    historyPos.current = -1
+    const mode = planNext || forcePlan ? 'plan' : undefined
+    setPlanNext(false)
+    if (threadId) {
+      const pref = settings?.followUpBehavior ?? 'queue'
+      const behavior = invert ? (pref === 'steer' ? 'queue' : 'steer') : pref
+      await A.sendMessage(threadId, input, { mode, steer: running && behavior === 'steer' })
+      return
+    }
+    // home composer: start a thread first
+    const id = await startHomeThread()
+    if (id) await A.sendMessage(id, input, { mode })
+  }
+
+  function recallHistory(dir: 1 | -1): boolean {
+    if (!threadId || !ts) return false
+    const msgs: string[] = []
+    for (const t of ts.turns) for (const i of t.items) if (i.type === 'userMessage') msgs.push(i.content.map((c) => (c.type === 'text' ? c.text : '')).join(''))
+    if (!msgs.length) return false
+    let pos = historyPos.current
+    pos = dir === -1 ? (pos < 0 ? msgs.length - 1 : Math.max(0, pos - 1)) : pos < 0 ? -1 : pos + 1
+    if (pos >= msgs.length) pos = -1
+    historyPos.current = pos
+    setDraft(pos < 0 ? '' : msgs[pos])
+    return true
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (mention && selectable.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const n = selectable.length
+        const at = Math.max(0, selectable.indexOf(mentionActive))
+        setMentionActive(selectable[e.key === 'ArrowDown' ? (at + 1) % n : (at - 1 + n) % n])
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        const it = mentionItems[mentionActive]
+        if (it && !it.disabled && !it.header) {
+          e.preventDefault()
+          it.onSelect?.()
+          return
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setMention(null)
+        return
+      }
+    }
+    if (e.key === 'Tab' && e.shiftKey) {
+      e.preventDefault()
+      setPlanNext((p) => !p)
+      return
+    }
+    // Esc stops the turn only while it is the `interrupt` binding (rebindable; App handles other keys)
+    if (e.key === 'Escape' && running && threadId && canon(bindings().interrupt) === 'Escape') {
+      e.preventDefault()
+      void A.interrupt(threadId)
+      return
+    }
+    const enterSends = settings?.enterSends ?? true
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+      const mod = e.ctrlKey || e.metaKey
+      if (mod && e.shiftKey) {
+        e.preventDefault()
+        void submit(true)
+        return
+      }
+      if ((enterSends && !e.shiftKey && !mod) || (!enterSends && mod)) {
+        e.preventDefault()
+        void submit()
+        return
+      }
+    }
+    if (e.key === 'ArrowUp' && !draft && recallHistory(-1)) {
+      e.preventDefault()
+      return
+    }
+    if (e.key === 'ArrowDown' && historyPos.current >= 0 && recallHistory(1)) {
+      e.preventDefault()
+    }
+  }
+
+  async function setModel(key: string) {
+    if (thread) await call('thread/update', { threadId: thread.id, model: key })
+    else setHomeModel(key)
+  }
+  async function setEffort(e: ReasoningEffort) {
+    if (thread) await call('thread/update', { threadId: thread.id, effort: e })
+    else setHomeEffort(e)
+  }
+  async function setPerm(p: PermissionMode) {
+    if (p === 'full-access') {
+      const ok = await A.confirmDialog('Full access', 'The agent will run commands without a sandbox and without asking. It can change or delete anything your account can. Continue?', 'Allow full access', true)
+      if (!ok) return
+    }
+    if (thread) await call('thread/update', { threadId: thread.id, permissionMode: p })
+    else setHomePerm(p)
+  }
+
+  const pickerItems: MenuItem[] = useMemo(() => {
+    if (!picker) return []
+    switch (picker.kind) {
+      case 'model': {
+        const byProvider = new Map<string, typeof models>()
+        for (const m of models) byProvider.set(m.providerId, [...(byProvider.get(m.providerId) ?? []), m])
+        const items: MenuItem[] = []
+        for (const [prov, ms] of byProvider) {
+          items.push({ label: prov, header: true })
+          for (const m of ms)
+            items.push({
+              label: m.displayName,
+              hint: `${formatTokens(m.contextWindow)}${m.capabilities.vision ? ' · vision' : ''}${m.available ? '' : ' · offline'}`,
+              checked: m.key === modelKey,
+              onSelect: () => void setModel(m.key),
+            })
+        }
+        if (!items.length) items.push({ label: 'No models: add an endpoint', onSelect: () => A.openSettings('models') })
+        items.push({ separator: true, label: '' }, { label: 'Models & endpoints…', onSelect: () => A.openSettings('models') })
+        return items
+      }
+      case 'effort':
+        return (model?.efforts.length ? model.efforts : (['low', 'medium', 'high'] as ReasoningEffort[])).map((e) => ({
+          label: EFFORT_LABEL[e],
+          checked: e === effort,
+          onSelect: () => void setEffort(e),
+        }))
+      case 'permission':
+        return (Object.keys(PERMISSION_LABEL) as PermissionMode[]).map((p) => ({
+          label: PERMISSION_LABEL[p],
+          hint: PERMISSION_HINT[p],
+          checked: p === perm,
+          danger: p === 'full-access',
+          onSelect: () => void setPerm(p),
+        }))
+      case 'project':
+        return [
+          { label: 'No project (chat)', checked: !ui.newThreadProjectId, onSelect: () => setUi({ newThreadProjectId: null }) },
+          ...projects.map((p) => ({ label: p.name, hint: p.folders[p.primary] ?? p.folders[0], checked: p.id === ui.newThreadProjectId, onSelect: () => setUi({ newThreadProjectId: p.id }) })),
+          { separator: true, label: '' },
+          { label: 'Add project folder…', onSelect: () => void A.addProjectFromDialog() },
+        ]
+      case 'runMode':
+        return [
+          { label: 'Local', hint: 'Work in the project folder', checked: ui.newThreadRunMode === 'local', onSelect: () => setUi({ newThreadRunMode: 'local' }) },
+          { label: 'Worktree', hint: 'Isolated git worktree on a new branch', checked: ui.newThreadRunMode === 'worktree', disabled: !project?.isGit, onSelect: () => setUi({ newThreadRunMode: 'worktree' }) },
+        ]
+      case 'branch': {
+        const cur = currentBranch ?? 'Current branch'
+        const items: MenuItem[] = [
+          { label: 'Start from', header: true },
+          { label: cur, hint: 'current branch', checked: homeBranch == null, onSelect: () => setHomeBranch(null) },
+          { label: `${cur} with uncommitted changes`, hint: 'copies your working tree', checked: homeBranch === CURRENT_WITH_CHANGES, onSelect: () => setHomeBranch(CURRENT_WITH_CHANGES) },
+        ]
+        const local = branches.filter((b) => !b.remote && !b.current)
+        const remote = branches.filter((b) => b.remote && !/\/HEAD$/.test(b.name))
+        if (local.length) items.push({ label: 'Branches', header: true }, ...local.map((b) => ({ label: b.name, checked: homeBranch === b.name, onSelect: () => setHomeBranch(b.name) })))
+        if (remote.length) items.push({ label: 'Remote branches', header: true }, ...remote.slice(0, 30).map((b) => ({ label: b.name, checked: homeBranch === b.name, onSelect: () => setHomeBranch(b.name) })))
+        return items
+      }
+      case 'environment':
+        return [
+          ...envs.map<MenuItem>((e) => ({
+            label: e.name || e.id,
+            hint: e.id === defaultEnvId ? 'default' : undefined,
+            checked: e.id === envId,
+            onSelect: () => setHomeEnv(e.id),
+          })),
+          { separator: true, label: '' },
+          { label: 'No environment', hint: 'no setup script or variables', checked: envId === '', onSelect: () => setHomeEnv('') },
+        ]
+      default:
+        return []
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [picker, models, modelKey, effort, perm, projects, ui.newThreadProjectId, ui.newThreadRunMode, model, branches, homeBranch, currentBranch, envs, envId, defaultEnvId])
+
+  const canSend = !!draft.trim() || attachments.length > 0
+  const chip = (kind: string, icon: React.ReactNode, label: React.ReactNode, title: string) => (
+    <button
+      ref={(el) => {
+        chipRefs.current[kind] = el
+      }}
+      className="chip"
+      title={title}
+      data-chip={kind}
+      onClick={(e) => setPicker({ kind, anchor: e.currentTarget })}
+    >
+      {icon}
+      <span className="ellipsis" style={{ maxWidth: 180 }}>
+        {label}
+      </span>
+      <ChevronDown size={11} />
+    </button>
+  )
+  const branchLabel = homeBranch === CURRENT_WITH_CHANGES ? `${currentBranch ?? 'Current'} + changes` : (homeBranch ?? currentBranch ?? 'Current branch')
+  const envName = envId === '' ? 'No environment' : envs.find((e) => e.id === envId)?.name || envId
+
+  return (
+    <div style={{ position: 'relative' }} ref={wrapRef}>
+      {menuOpen && (
+        <div
+          className="mention-menu"
+          role="listbox"
+          aria-label="Suggestions"
+          ref={menuRef}
+          data-below={menuPlace?.below || undefined}
+          style={menuPlace ? { maxHeight: menuPlace.maxHeight } : undefined}
+        >
+          {mentionItems.map((it, i) =>
+            it.header ? (
+              <div key={i} className="menu-label mention-group" role="presentation">
+                {it.label}
+              </div>
+            ) : (
+              <button
+                key={i}
+                role="option"
+                aria-selected={i === mentionActive}
+                className="menu-item"
+                data-active={i === mentionActive}
+                disabled={it.disabled}
+                onMouseEnter={() => setMentionActive(i)}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  it.onSelect?.()
+                }}
+              >
+                {it.icon}
+                <span className="ellipsis">{it.label}</span>
+                {it.hint && <span className="hint ellipsis" style={{ maxWidth: '55%' }}>{it.hint}</span>}
+              </button>
+            ),
+          )}
+        </div>
+      )}
+      <div
+        className="composer"
+        style={dragOver ? { borderColor: 'var(--accent)', borderStyle: 'dashed' } : undefined}
+        onDragOver={(e) => {
+          e.preventDefault()
+          e.dataTransfer.dropEffect = 'copy'
+          setDragOver(true)
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+      >
+        {attachments.length > 0 && (
+          <div className="composer-attachments">
+            {attachments.map((a) => (
+              <span key={a.id} className="attachment" title={a.label}>
+                <AttachmentIcon a={a} />
+                <span className="ellipsis">{a.label}</span>
+                <button className="icon-btn sm" aria-label={`Remove ${a.label}`} onClick={() => setAttachments((x) => x.filter((y) => y.id !== a.id))}>
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <textarea
+          ref={ta}
+          rows={1}
+          value={draft}
+          aria-label="Message"
+          placeholder={placeholder ?? (running ? (settings?.followUpBehavior === 'steer' ? 'Steer the agent…' : 'Queue a follow-up…') : threadId ? 'Ask for follow-up changes' : 'Ask Odex anything. @ to mention files, $ for skills, / for commands')}
+          onChange={(e) => {
+            setDraft(e.target.value)
+            detectMention(e.target.value, e.target.selectionStart)
+          }}
+          onKeyDown={onKeyDown}
+          onClick={(e) => detectMention(draft, e.currentTarget.selectionStart)}
+          onBlur={() => setTimeout(() => setMention(null), 150)}
+          onPaste={(e) => {
+            const files = Array.from(e.clipboardData.files)
+            if (files.length) {
+              e.preventDefault()
+              void addFiles(files)
+            }
+          }}
+        />
+        <div className="composer-bar">
+          <button
+            className="icon-btn"
+            aria-label="Attach files"
+            title="Attach files or images"
+            onClick={async () => {
+              const files = await window.odex.dialog.openFiles()
+              void addFiles(files)
+            }}
+          >
+            <Paperclip size={15} />
+          </button>
+          {!threadId && chip('project', <FolderGit2 size={13} />, project?.name ?? 'No project', 'Project for the new thread')}
+          {!threadId && project?.isGit && chip('runMode', <GitBranch size={13} />, ui.newThreadRunMode === 'worktree' ? 'Worktree' : 'Local', 'Where the thread runs')}
+          {branchCwd && chip('branch', <GitBranchPlus size={13} />, branchLabel, 'Starting branch for the worktree')}
+          {envs.length > 0 && envName && chip('environment', <Boxes size={13} />, envName, 'Environment (setup script and variables)')}
+          {chip('model', <Cpu size={13} />, model?.displayName ?? modelKey ?? 'No model', 'Model (Ctrl+Shift+M)')}
+          {model && model.efforts.length > 0 && chip('effort', <Brain size={13} />, EFFORT_LABEL[effort ?? 'medium'], 'Reasoning effort')}
+          {chip('permission', <Shield size={13} />, PERMISSION_LABEL[perm], PERMISSION_HINT[perm])}
+          <button className={`chip ${planNext ? 'active' : ''}`} title="Plan first (Shift+Tab)" aria-pressed={planNext} onClick={() => setPlanNext((p) => !p)}>
+            <ListChecks size={13} /> Plan
+          </button>
+          <span className="spacer" />
+          {threadId && <ContextRing threadId={threadId} />}
+          {running && !canSend ? (
+            <button className="send-btn stop" aria-label="Stop" title="Stop (Esc)" onClick={() => threadId && void A.interrupt(threadId)}>
+              <Square size={12} fill="currentColor" />
+            </button>
+          ) : (
+            <button className="send-btn" aria-label="Send" title={running ? (settings?.followUpBehavior === 'steer' ? 'Steer (Enter) · Queue (Ctrl+Shift+Enter)' : 'Queue (Enter) · Steer (Ctrl+Shift+Enter)') : 'Send (Enter)'} disabled={!canSend} onClick={() => void submit()}>
+              <ArrowUp size={16} />
+            </button>
+          )}
+        </div>
+      </div>
+      {picker && pickerItems.length > 0 && <Menu anchor={picker.anchor} items={pickerItems} above onClose={() => setPicker(null)} minWidth={240} />}
+      {ts && ts.thread.lastError && ts.thread.status === 'error' && (
+        <div className="xs" style={{ color: 'var(--danger)', marginTop: 4 }}>
+          {ts.thread.lastError}
+        </div>
+      )}
+    </div>
+  )
+}

@@ -1,0 +1,18 @@
+[package]
+name = "odex-hooks"
+description = "User / project / plugin command hooks with trust review for the Odex agent."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hex.workspace = true
+odex-protocol.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

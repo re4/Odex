@@ -1,0 +1,117 @@
+# electron-builder configuration for Odex.
+#
+# Build installers with `npm run dist:win` / `dist:mac` / `dist:linux` (or `npm run dist` for the host OS).
+# Each script first runs `scripts/prepare-engine.mjs`, which stages the release `odex-engine` binary into
+# build/bin/; it ships as resources/bin/odex-engine(.exe), where main/paths.ts looks for it.
+# Model presets are compiled into the engine (include_str!), so presets/ is not shipped separately.
+#
+# Signing is not configured here. Provide it through the standard electron-builder environment variables
+# (CSC_LINK / CSC_KEY_PASSWORD, or WIN_CSC_LINK on Windows; APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
+# APPLE_TEAM_ID for notarization). Unsigned builds work locally but trigger SmartScreen / Gatekeeper.
+
+appId: dev.odex.app
+productName: Odex
+copyright: Copyright © 2026 The Odex Authors
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+
+directories:
+  output: release
+  # Icons and the MSIX logos (resources/appx/) live in resources/; build/ only holds the staged engine.
+  buildResources: resources
+
+files:
+  - out/**
+  - package.json
+  # The renderer is bundled by Vite into out/renderer, so its dependencies don't need to ship again in
+  # node_modules. Only @lydell/node-pty (terminals, loaded by the main process) is needed at runtime.
+  - "!node_modules/{@codemirror,@lezer,@marijn,@tanstack,@xterm,@types,dompurify,highlight.js,lucide-react,marked,react,react-dom,scheduler,zustand,crelt,style-mod,w3c-keyname}/**"
+
+# Native terminal backend (conpty.node, conpty.dll, OpenConsole.exe, pty.node) must live outside the asar.
+asarUnpack:
+  - node_modules/@lydell/node-pty*/**
+
+# @lydell/node-pty ships N-API prebuilds, so there is nothing to rebuild against Electron's headers.
+npmRebuild: false
+
+extraResources:
+  - from: build/bin
+    to: bin
+    filter:
+      - odex-engine
+      - odex-engine.exe
+  # main/paths.ts resourcePath(): notification and tray icons.
+  - from: resources
+    to: .
+    filter:
+      - icon*.png
+      - tray*.png
+
+protocols:
+  - name: Odex
+    schemes:
+      - odex
+
+# Never publish from electron-builder; the release workflow uploads artifacts with `gh release`.
+publish: null
+
+win:
+  icon: resources/icon.png
+  target:
+    - nsis
+    # electron-builder's AppX target; the .msix artifact name makes makeappx emit an MSIX package.
+    - appx
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Odex
+  # Per-user installs default to %LOCALAPPDATA%\Programs\Odex, which keeps resource paths far below
+  # MAX_PATH even for the unpacked node-pty files. User data lives in ~/.odex and is never removed.
+  deleteAppDataOnUninstall: false
+  artifactName: ${productName}-Setup-${version}-${arch}.${ext}
+
+appx:
+  artifactName: ${productName}-${version}-${arch}.msix
+  applicationId: Odex
+  displayName: Odex
+  backgroundColor: "#3b4fc4"
+  languages:
+    - en-US
+  # PLACEHOLDERS. Replace with the values from Partner Center (Product identity) before publishing.
+  # `publisher` must equal the Subject of the certificate that signs the package; for local testing,
+  # sign with a self-signed certificate whose Subject is exactly this string.
+  identityName: OdexAuthors.Odex
+  publisher: CN=Odex Authors
+  publisherDisplayName: The Odex Authors
+
+mac:
+  icon: resources/icon.png
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+  hardenedRuntime: true
+  # Signing and notarization happen only when CSC_LINK and the APPLE_* variables are set.
+
+dmg:
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+
+linux:
+  icon: resources/icon.png
+  category: Development
+  executableName: odex
+  synopsis: Self-hosted coding agent for vLLM
+  description: Odex is a desktop coding agent that runs on self-hosted models served by vLLM.
+  # PLACEHOLDER maintainer address (deb requires one).
+  maintainer: The Odex Authors <maintainers@odex.invalid>
+  target:
+    - AppImage
+    - deb
+
+deb:
+  # Recommended at runtime: bubblewrap for the agent sandbox, git for worktrees and review.
+  fpm:
+    - --deb-recommends=bubblewrap
+    - --deb-recommends=git

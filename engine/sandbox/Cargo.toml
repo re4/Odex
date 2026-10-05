@@ -1,0 +1,33 @@
+[package]
+name = "odex-sandbox"
+description = "Sandboxed command execution for the Odex engine (Windows restricted token / AppContainer + Job Objects, Linux bubblewrap, macOS Seatbelt)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+odex-protocol.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+encoding_rs.workspace = true
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Isolation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,37 @@
+[package]
+name = "odex-computer-use"
+description = "Odex computer use: screenshots, UI Automation trees/actions and real input for desktop apps (Windows first)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+odex-protocol.workspace = true
+thiserror.workspace = true
+image.workspace = true
+base64.workspace = true
+serde.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_Xps",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Registry",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+

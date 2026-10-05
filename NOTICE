@@ -1,0 +1,14 @@
+Odex
+Copyright 2026 The Odex Authors
+
+This product is original work licensed under the Apache License, Version 2.0.
+
+Odex is an independent project. It is not affiliated with, endorsed by, or
+sponsored by OpenAI. Its engine/UI protocol is modeled on the publicly
+documented architecture of the Apache-2.0 licensed `openai/codex` project
+(app-server JSON-RPC split). No source code from that project has been copied.
+If any Apache-2.0 code is ported in the future, its original license header is
+retained and it is listed below.
+
+Ported third-party code:
+  (none)

@@ -1,0 +1,101 @@
+[workspace]
+resolver = "2"
+members = [
+    "protocol",
+    "config",
+    "llm",
+    "context",
+    "apply-patch",
+    "execpolicy",
+    "sandbox",
+    "hooks",
+    "file-search",
+    "git",
+    "mcp-client",
+    "computer-use",
+    "browser-bridge",
+    "automations",
+    "memories",
+    "tools",
+    "core",
+    "app-server",
+    "exec",
+    "cli",
+    "mock-vllm",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/odex-app/odex"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# internal
+odex-protocol = { path = "protocol" }
+odex-config = { path = "config" }
+odex-llm = { path = "llm" }
+odex-context = { path = "context" }
+odex-apply-patch = { path = "apply-patch" }
+odex-execpolicy = { path = "execpolicy" }
+odex-sandbox = { path = "sandbox" }
+odex-hooks = { path = "hooks" }
+odex-file-search = { path = "file-search" }
+odex-git = { path = "git" }
+odex-mcp-client = { path = "mcp-client" }
+odex-computer-use = { path = "computer-use" }
+odex-browser-bridge = { path = "browser-bridge" }
+odex-automations = { path = "automations" }
+odex-memories = { path = "memories" }
+odex-tools = { path = "tools" }
+odex-core = { path = "core" }
+odex-app-server = { path = "app-server" }
+odex-exec = { path = "exec" }
+odex-mock-vllm = { path = "mock-vllm" }
+
+# external (versions pinned to APIs we know well; see docs/DECISIONS.md D-004)
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+toml = "0.8"
+toml_edit = "0.22"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io", "codec"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+bytes = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+ts-rs = { version = "10", features = ["serde-json-impl", "uuid-impl", "no-serde-warnings"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+regex = "1"
+once_cell = "1"
+dirs = "5"
+shlex = "1.3"
+globset = "0.4"
+ignore = "0.4"
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"
+similar = "2"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+rand = "0.8"
+axum = "0.7"
+portable-pty = "0.8"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+croner = "2"
+tempfile = "3"
+tokio-tungstenite = "0.24"
+url = "2"
+encoding_rs = "0.8"
+pretty_assertions = "1"
+wildmatch = "2"

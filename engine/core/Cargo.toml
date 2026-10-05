@@ -1,0 +1,51 @@
+[package]
+name = "odex-core"
+description = "Odex agent engine: threads, turns, tools, approvals, context management, storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+odex-protocol.workspace = true
+odex-config.workspace = true
+odex-llm.workspace = true
+odex-context.workspace = true
+odex-tools.workspace = true
+odex-apply-patch.workspace = true
+odex-execpolicy.workspace = true
+odex-sandbox.workspace = true
+odex-hooks.workspace = true
+odex-file-search.workspace = true
+odex-git.workspace = true
+odex-mcp-client.workspace = true
+odex-computer-use.workspace = true
+odex-browser-bridge.workspace = true
+odex-automations.workspace = true
+odex-memories.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+regex.workspace = true
+once_cell.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+portable-pty.workspace = true
+dirs.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+odex-mock-vllm.workspace = true
+tempfile.workspace = true
+regex.workspace = true
+pretty_assertions.workspace = true

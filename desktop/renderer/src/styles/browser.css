@@ -1,0 +1,277 @@
+/* In-app browser panel (side panel → Browser) and its settings pages. */
+
+.browser-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ---------- tab strip */
+.browser-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 6px 6px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunken);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  flex: none;
+}
+.browser-tabs::-webkit-scrollbar {
+  display: none;
+}
+.browser-tab {
+  position: relative;
+  top: 1px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 180px;
+  min-width: 72px;
+  height: 29px;
+  padding: 0 3px 0 9px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+.browser-tab:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.browser-tab[aria-selected='true'] {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  color: var(--fg);
+}
+.browser-tab:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.browser-tab.agent .browser-tab-icon {
+  color: var(--accent);
+}
+.browser-tab-icon {
+  flex: none;
+  color: var(--fg-subtle);
+}
+.browser-tab-spinner {
+  width: 12px;
+  height: 12px;
+}
+.browser-tab-close {
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+}
+.browser-tab:hover .browser-tab-close,
+.browser-tab[aria-selected='true'] .browser-tab-close,
+.browser-tab-close:focus-visible {
+  opacity: 1;
+}
+.browser-newtab {
+  align-self: center;
+  margin: 0 2px 2px;
+}
+
+/* ---------- toolbar */
+.browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  flex: none;
+}
+.browser-url {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 80px;
+  height: 28px;
+  margin: 0 4px;
+  padding: 0 10px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: var(--bg-sunken);
+  transition: border-color var(--transition), background var(--transition);
+}
+.browser-url:focus-within {
+  border-color: var(--accent);
+  background: var(--bg-elev);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.browser-url input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  user-select: text;
+}
+.browser-url input::placeholder {
+  color: var(--fg-subtle);
+}
+
+/* ---------- status bars (agent, comment mode) */
+.browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 3px 6px 3px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--font-size-sm);
+  flex: none;
+}
+.browser-bar.agent {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elev));
+  color: var(--fg-muted);
+}
+.browser-bar.agent svg {
+  color: var(--accent);
+}
+.browser-bar.agent.live {
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-elev));
+  color: var(--fg);
+}
+.browser-bar.pick {
+  background: color-mix(in srgb, var(--warning) 12%, var(--bg-elev));
+}
+
+/* ---------- page area (the native view is laid over this box) */
+.browser-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-elev);
+}
+
+/* new tab page */
+.browser-ntp {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 36px 20px 24px;
+}
+.browser-ntp-title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+.browser-ntp .section-title {
+  margin-top: 10px;
+}
+.browser-ntp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.browser-ntp-recent {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  margin: 0 -8px;
+}
+
+/* history popover */
+.browser-history {
+  width: 380px;
+  max-width: calc(100vw - 16px);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  overflow: hidden;
+}
+.browser-history-list {
+  overflow-y: auto;
+  min-height: 0;
+  max-height: 50vh;
+}
+.browser-history-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  line-height: 1.3;
+}
+.browser-history-empty {
+  padding: 10px 8px;
+}
+
+/* ---------- settings pages */
+.site-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+.site-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 4px 0 9px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  font-family: var(--font-code);
+  font-size: var(--font-size-xs);
+}
+.site-chip.blocked {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-sunken));
+}
+.cu-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+}
+.cu-status.killed {
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+  background: color-mix(in srgb, var(--danger) 7%, var(--bg-elev));
+}
+.cu-notes {
+  margin: 0;
+  padding-left: 18px;
+}
+.cu-windows {
+  width: 100%;
+  border-collapse: collapse;
+}
+.cu-windows td {
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.cu-windows td.cu-win-title {
+  max-width: 0;
+  width: 100%;
+}
+.cu-safety {
+  padding: 10px 14px;
+  line-height: 1.5;
+}
+.cu-safety ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}

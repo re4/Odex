@@ -1,0 +1,38 @@
+/* Settings deep search: hit list and row highlights. */
+
+.settings-hits {
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-hit {
+  width: 100%;
+  gap: 8px;
+}
+.settings-hit .subtle {
+  flex: none;
+}
+.setting-match {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  border-radius: var(--radius-sm);
+}
+.row.setting-match {
+  padding-left: 10px !important;
+  padding-right: 6px !important;
+}
+.setting-flash {
+  animation: odex-setting-flash 1.6s ease-out;
+}
+@keyframes odex-setting-flash {
+  0%,
+  35% {
+    background: color-mix(in srgb, var(--accent) 26%, transparent);
+  }
+  100% {
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+  }
+}
+[data-motion='off'] .setting-flash {
+  animation: none;
+}

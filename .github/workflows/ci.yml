@@ -1,0 +1,293 @@
+# Odex CI: engine (Rust) and desktop (Electron) on Windows (primary), Linux and macOS, plus installers
+# for tags. Only first-party actions plus dtolnay/rust-toolchain and Swatinem/rust-cache are used.
+#
+# Not run here (see docs/PROGRESS.md "Testing"):
+#   * the Notepad computer-use harness (#[ignore]; needs an interactive desktop)
+#   * the real-vLLM smoke suite (engine/core/tests/real_vllm.rs skips unless ODEX_E2E_BASE_URL is set)
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  # Electron and the engine log here instead of the console.
+  ODEX_LOG: warn
+
+jobs:
+  engine:
+    name: Engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: engine
+    steps:
+      - name: Keep LF line endings
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine -> target
+
+      - name: Linux sandbox prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces, which bwrap and headless Chrome need.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Git identity for tests that commit
+        run: |
+          git config --global user.name "Odex CI"
+          git config --global user.email "ci@odex.invalid"
+          git config --global init.defaultBranch main
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        # The soak test runs in its own step below so its timing and output stay visible.
+        run: cargo test --workspace -- --skip soak_200_steps_on_4k_window
+
+      - name: Context soak test (4,096-token window, 200 steps)
+        run: cargo test -p odex-core --test soak -- --nocapture
+
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    steps:
+      - name: Keep LF line endings
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine -> target
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Linux prerequisites
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb bubblewrap
+          # Electron's and bwrap's sandboxes need unprivileged user namespaces (restricted on Ubuntu 24.04).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+      - name: Git identity for tests that commit
+        working-directory: .
+        run: |
+          git config --global user.name "Odex CI"
+          git config --global user.email "ci@odex.invalid"
+          git config --global init.defaultBranch main
+
+      - name: Build engine and mock vLLM (used by the e2e tests)
+        working-directory: engine
+        run: cargo build -p odex-engine -p odex-mock-vllm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Playwright e2e (Electron, against the mock vLLM)
+        id: e2e
+        run: |
+          platform=$(node -p process.platform)
+          args=()
+          # Visual baselines are per platform (e2e/__screenshots__/<platform>). When a platform has none
+          # yet, record them instead of failing and upload them below so they can be committed.
+          if [ ! -d "e2e/__screenshots__/$platform" ]; then
+            echo "No visual baselines for $platform: recording them."
+            args+=(--update-snapshots=all)
+            echo "bootstrap=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a npx playwright test "${args[@]}"
+          else
+            npx playwright test "${args[@]}"
+          fi
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: |
+            desktop/playwright-report/
+            desktop/test-results/
+          retention-days: 14
+
+      - name: Upload recorded visual baselines
+        if: always() && steps.e2e.outputs.bootstrap == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-baselines-${{ matrix.os }}
+          path: desktop/e2e/__screenshots__/
+          retention-days: 14
+
+  installers:
+    name: Installers (${{ matrix.os }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [engine, desktop]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+          - os: macos-latest
+            script: dist:mac
+          - os: ubuntu-latest
+            script: dist:linux
+    defaults:
+      run:
+        shell: bash
+        working-directory: desktop
+    steps:
+      - name: Keep LF line endings
+        if: runner.os == 'Windows'
+        working-directory: .
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine -> target
+          key: release
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Build release engine
+        working-directory: engine
+        run: cargo build --release -p odex-engine
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Use the installed Windows SDK for MSIX packaging
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $kit = Get-ChildItem $root -Directory -Filter '10.*' -ErrorAction SilentlyContinue |
+            Sort-Object { [version]$_.Name } -Descending |
+            Where-Object { Test-Path (Join-Path $_.FullName 'x64\makeappx.exe') } |
+            Select-Object -First 1
+          if ($kit) {
+            "ELECTRON_BUILDER_WINDOWS_KITS_PATH=$(Join-Path $kit.FullName 'x64')" >> $env:GITHUB_ENV
+          } else {
+            Write-Host 'No Windows SDK found; electron-builder downloads its own toolset.'
+          }
+
+      - name: Build installers
+        run: npm run ${{ matrix.script }}
+        env:
+          # Signing is optional: these are empty unless the repository defines the secrets.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.msix
+            desktop/release/*.dmg
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+
+  release:
+    name: Draft GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [installers]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --draft --generate-notes --title "Odex $GITHUB_REF_NAME"
