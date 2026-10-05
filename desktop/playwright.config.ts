@@ -9,6 +9,6 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   snapshotPathTemplate: '{testDir}/__screenshots__/{platform}/{testFilePath}/{arg}{ext}',
-  outputDir: './test-results',
+  outputDir: process.env.ODEX_OUT ? `./test-results/${process.env.ODEX_OUT}` : './test-results',
   use: { trace: 'retain-on-failure' },
 })

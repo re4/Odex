@@ -110,7 +110,7 @@ export async function launch(opts: { mockUrl?: string; onboarded?: boolean; them
     JSON.stringify({ onboarded: opts.onboarded ?? true, theme: opts.theme ?? 'light', notifyTurnComplete: 'never', notifyApprovals: false, keepAwake: false, keepRunningInTray: false, reducedMotion: 'on' }),
   )
   const app = await electron.launch({
-    args: [path.join(desktopDir, 'out', 'main', 'index.js')],
+    args: [path.join(desktopDir, process.env.ODEX_OUT || 'out', 'main', 'index.js')],
     env: {
       ...process.env,
       ODEX_HOME: home,
