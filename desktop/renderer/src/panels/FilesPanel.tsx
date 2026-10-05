@@ -4,6 +4,8 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import type { EditorState, Text } from '@codemirror/state'
 import type { EditorView, ViewUpdate } from '@codemirror/view'
 import {
+  ArrowLeft,
+  ArrowRight,
   AtSign,
   BookOpen,
   ChevronDown,
@@ -11,6 +13,7 @@ import {
   ChevronsDownUp,
   Code,
   Copy,
+  Download,
   Ellipsis,
   ExternalLink,
   Eye,
@@ -25,6 +28,7 @@ import {
   FolderSearch,
   FolderTree,
   GitBranch,
+  History,
   ListTree,
   RefreshCw,
   Save,
@@ -32,14 +36,16 @@ import {
   TextWrap,
   X,
 } from 'lucide-react'
-import type { GitFileStatus } from '@shared/index'
+import type { GitFileStatus, Turn } from '@shared/index'
 import { isRunning, useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import { confirmDialog, copy } from '@/lib/actions'
 import { Menu, ResizeHandle, basename, type MenuItem } from '@/components/ui'
 import { Markdown } from '@/components/Markdown'
-import { CodeEditor, createEditorState, extOf, forgetEditorScroll, languageName, withEditorOptions } from '@/components/CodeEditor'
+import { CodeEditor, createEditorState, extOf, forgetEditorScroll, languageName, withEditorOptions, type LineAnnotation } from '@/components/CodeEditor'
+import { saveFileCopy } from '@/panels/SourcesPanel'
 import '@/styles/files.css'
+import '@/styles/sidepanel.css'
 
 /*
  * Files side-panel tab: a lazily expanding file tree rooted at the thread's
@@ -171,9 +177,14 @@ interface FilesState {
   treeCollapsed: boolean
   treeHeight: number
   wrap: boolean
+  /** Back/forward history of opened files per root (paths). */
+  nav: Record<string, { stack: string[]; index: number }>
+  /** Recently opened files per root, most recent first (paths). */
+  recent: Record<string, string[]>
 }
 
 const PERSIST_KEY = 'odex.files.v1'
+const RECENT_MAX = 20
 const emptySession: Session = { tabs: [], active: null, expanded: [] }
 
 function newTab(path: string): FileTab {
@@ -189,12 +200,15 @@ function newTab(path: string): FileTab {
     notUtf8: false,
     allowEdit: false,
     reveal: null,
-    mode: ext === 'svg' || ext === 'md' || ext === 'markdown' || ext === 'mdx' ? (ext === 'svg' ? 'preview' : 'source') : 'source',
+    // SVG and HTML open rendered; Markdown opens as source
+    mode: ext === 'svg' || isHtmlExt(ext) ? 'preview' : 'source',
   }
 }
 
+const isHtmlExt = (ext: string): boolean => ext === 'html' || ext === 'htm' || ext === 'xhtml'
+
 function loadPersisted(): FilesState {
-  const base: FilesState = { files: {}, sessions: {}, dirs: {}, git: {}, showHidden: false, treeCollapsed: false, treeHeight: 280, wrap: false }
+  const base: FilesState = { files: {}, sessions: {}, dirs: {}, git: {}, showHidden: false, treeCollapsed: false, treeHeight: 280, wrap: false, nav: {}, recent: {} }
   try {
     const raw = JSON.parse(localStorage.getItem(PERSIST_KEY) || '{}') as {
       sessions?: Record<string, { tabs: string[]; active: string | null; expanded: string[] }>
@@ -202,7 +216,9 @@ function loadPersisted(): FilesState {
       treeCollapsed?: boolean
       treeHeight?: number
       wrap?: boolean
+      recent?: Record<string, string[]>
     }
+    for (const [root, list] of Object.entries(raw.recent ?? {})) if (Array.isArray(list)) base.recent[root] = list.filter((p) => typeof p === 'string').slice(0, RECENT_MAX)
     for (const [root, s] of Object.entries(raw.sessions ?? {})) {
       const tabs: string[] = []
       for (const p of s.tabs ?? []) {
@@ -224,7 +240,15 @@ const useFiles = create<FilesState>(() => loadPersisted())
 
 let persistTimer: ReturnType<typeof setTimeout> | undefined
 useFiles.subscribe((s, prev) => {
-  if (s.sessions === prev.sessions && s.showHidden === prev.showHidden && s.treeCollapsed === prev.treeCollapsed && s.treeHeight === prev.treeHeight && s.wrap === prev.wrap) return
+  if (
+    s.sessions === prev.sessions &&
+    s.showHidden === prev.showHidden &&
+    s.treeCollapsed === prev.treeCollapsed &&
+    s.treeHeight === prev.treeHeight &&
+    s.wrap === prev.wrap &&
+    s.recent === prev.recent
+  )
+    return
   clearTimeout(persistTimer)
   persistTimer = setTimeout(() => {
     const st = useFiles.getState()
@@ -233,10 +257,52 @@ useFiles.subscribe((s, prev) => {
       sessions[root] = { tabs: ss.tabs.map((t) => st.files[t]?.path ?? t), active: ss.active ? (st.files[ss.active]?.path ?? null) : null, expanded: ss.expanded.slice(-300) }
     }
     try {
-      localStorage.setItem(PERSIST_KEY, JSON.stringify({ sessions, showHidden: st.showHidden, treeCollapsed: st.treeCollapsed, treeHeight: st.treeHeight, wrap: st.wrap }))
+      const recent = Object.fromEntries(Object.entries(st.recent).slice(-40))
+      localStorage.setItem(PERSIST_KEY, JSON.stringify({ sessions, showHidden: st.showHidden, treeCollapsed: st.treeCollapsed, treeHeight: st.treeHeight, wrap: st.wrap, recent }))
     } catch {}
   }, 300)
 })
+
+// ------------------------------------------------------------------ back/forward + recent files
+
+/** Set while back/forward re-opens a file, so the move is not recorded as a new location. */
+let navigating = false
+
+// every change of a root's active tab is a location (history) and a recent file
+useFiles.subscribe((s, prev) => {
+  if (s.sessions === prev.sessions) return
+  let nav = s.nav
+  let recent = s.recent
+  for (const [root, ss] of Object.entries(s.sessions)) {
+    if (!ss.active || ss.active === prev.sessions[root]?.active) continue
+    const path = s.files[ss.active]?.path
+    if (!path) continue
+    const list = recent[root] ?? []
+    recent = { ...recent, [root]: [path, ...list.filter((p) => k(p) !== k(path))].slice(0, RECENT_MAX) }
+    if (navigating) continue
+    const h = nav[root] ?? { stack: [], index: -1 }
+    if (h.stack[h.index] && k(h.stack[h.index]) === k(path)) continue
+    const stack = [...h.stack.slice(0, h.index + 1), path].slice(-50)
+    nav = { ...nav, [root]: { stack, index: stack.length - 1 } }
+  }
+  if (nav !== s.nav || recent !== s.recent) useFiles.setState({ nav, recent })
+})
+
+/** Alt+Left / Alt+Right: go back / forward between the files opened in a root. */
+function navigateFiles(root: string, dir: -1 | 1): void {
+  const h = useFiles.getState().nav[root]
+  if (!h) return
+  const i = h.index + dir
+  const path = h.stack[i]
+  if (!path) return
+  useFiles.setState({ nav: { ...useFiles.getState().nav, [root]: { ...h, index: i } } })
+  navigating = true
+  try {
+    openFileInSession(root, path)
+  } finally {
+    navigating = false
+  }
+}
 
 /** Editor states and last-saved documents per file key (not reactive). */
 const editorStates = new Map<string, EditorState>()
@@ -839,6 +905,13 @@ export function FilesPanel() {
       e.preventDefault()
       e.stopPropagation()
       void saveFile(session.active, runningRef.current)
+    } else if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      // back / forward between opened files (text fields keep their own Alt+arrows)
+      const t = e.target as HTMLElement
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return
+      e.preventDefault()
+      e.stopPropagation()
+      navigateFiles(sk, e.key === 'ArrowLeft' ? -1 : 1)
     }
   }
 
@@ -890,6 +963,19 @@ function TreeHeader(props: { root: string | null; roots: string[]; sk: string; o
   const collapsed = useFiles((s) => s.treeCollapsed)
   const showHidden = useFiles((s) => s.showHidden)
   const branch = useFiles((s) => (props.root ? s.git[k(props.root)]?.branch : undefined))
+  const recent = useFiles((s) => s.recent[props.sk]) ?? []
+  const [recentAnchor, setRecentAnchor] = useState<HTMLElement | null>(null)
+  const recentItems: MenuItem[] = [
+    { label: 'Recent files', header: true },
+    ...(recent.length
+      ? recent.map((p) => ({
+          label: <span title={p}>{relPath(props.root, p)}</span>,
+          icon: fileIcon(p, 13),
+          onSelect: () => void openFileInSession(props.sk, p),
+        }))
+      : [{ label: 'No recent files yet', disabled: true }]),
+    ...(recent.length ? [{ separator: true, label: '' }, { label: 'Clear recent files', onSelect: () => useFiles.setState({ recent: { ...useFiles.getState().recent, [props.sk]: [] } }) }] : []),
+  ]
   return (
     <div className="panel-header files-head">
       <button
@@ -923,6 +1009,10 @@ function TreeHeader(props: { root: string | null; roots: string[]; sk: string; o
       <span className="spacer" />
       {props.root && (
         <>
+          <button className={`icon-btn sm ${recentAnchor ? 'active' : ''}`} aria-label="Recent files" title="Recent files" onClick={(e) => setRecentAnchor(recentAnchor ? null : e.currentTarget)}>
+            <History size={13} />
+          </button>
+          {recentAnchor && <Menu anchor={recentAnchor} items={recentItems} onClose={() => setRecentAnchor(null)} align="right" minWidth={260} />}
           <button
             className={`icon-btn sm ${showHidden ? 'active' : ''}`}
             aria-label="Show ignored files"
@@ -1025,6 +1115,7 @@ function TreeBody(props: { root: string; sk: string; selected: string | null; se
   }, [virt, setSelected])
 
   const onKeyDown = (ev: React.KeyboardEvent) => {
+    if (ev.altKey) return // Alt+arrows: file back/forward (panel handler)
     const i = rows.findIndex((r) => k(r.entry.path) === selected)
     const row = rows[i]
     const go = (n: number) => {
@@ -1453,14 +1544,19 @@ function EditorArea(props: { root: string | null; sk: string; threadRunning: boo
 
   const line = () => (active.view && active.key === key ? active.view.state.doc.lineAt(active.view.state.selection.main.head).number : undefined)
   const ext = t ? extOf(t.path) : ''
-  const previewable = t?.kind === 'text' && (ext === 'md' || ext === 'markdown' || ext === 'mdx' || ext === 'svg')
+  const previewable = t?.kind === 'text' && (ext === 'md' || ext === 'markdown' || ext === 'mdx' || ext === 'svg' || isHtmlExt(ext))
   const g = t && key ? git?.files[key] : undefined
   const readOnly = !!t && t.notUtf8 && !t.allowEdit
+  const nav = useFiles((s) => s.nav[sk])
+  const canBack = !!nav && nav.index > 0
+  const canForward = !!nav && nav.index < nav.stack.length - 1
+  const annotations = useAgentEdits(t?.kind === 'text' ? t.path : undefined, t?.mtime)
 
   const moreItems: MenuItem[] = t
     ? [
         { label: 'Open in external editor', icon: <ExternalLink size={13} />, onSelect: () => void window.odex.shell.openInEditor(t.path, line()) },
         { label: revealLabel, icon: <FolderOpen size={13} />, onSelect: () => void window.odex.shell.showItem(t.path) },
+        { label: 'Save a copy as…', icon: <Download size={13} />, disabled: t.deleted, onSelect: () => void saveFileCopy(t.path) },
         { label: 'Reveal in file tree', icon: <ListTree size={13} />, disabled: !root || !under(root, t.path), onSelect: () => props.onRevealInTree(t.path) },
         { separator: true, label: '' },
         { label: 'Mention in composer', icon: <AtSign size={13} />, onSelect: () => mention(t.path) },
@@ -1560,6 +1656,12 @@ function EditorArea(props: { root: string | null; sk: string; threadRunning: boo
       {t && key && (
         <>
           <div className="files-toolbar">
+            <button className="icon-btn sm" aria-label="Go back" title="Back (Alt+Left)" disabled={!canBack} onClick={() => navigateFiles(sk, -1)}>
+              <ArrowLeft size={13} />
+            </button>
+            <button className="icon-btn sm" aria-label="Go forward" title="Forward (Alt+Right)" disabled={!canForward} onClick={() => navigateFiles(sk, 1)}>
+              <ArrowRight size={13} />
+            </button>
             <Crumb path={relPath(root, t.path)} full={t.path} />
             {g && (
               <span className="files-git-chip xs" data-git={g}>
@@ -1645,6 +1747,8 @@ function EditorArea(props: { root: string | null; sk: string; threadRunning: boo
               onUpdate={onUpdate}
               onSave={save}
               onView={onView}
+              annotations={annotations}
+              onNavigate={(dir) => navigateFiles(sk, dir)}
               onOpenLink={(p, ln) => {
                 const target = isAbs(p) ? normPath(p) : join(parentOf(t.path), p)
                 openFileInSession(sk, target, ln)
@@ -1696,6 +1800,8 @@ function FileBody(props: {
   onSave: () => void
   onView: (v: EditorView | null) => void
   onOpenLink: (p: string, line?: number) => void
+  annotations?: LineAnnotation[]
+  onNavigate?: (dir: -1 | 1) => void
 }) {
   const { fileKey: key, t } = props
   const getState = useCallback(() => editorStates.get(key) ?? createEditorState('', t.path), [key, t.path])
@@ -1747,11 +1853,12 @@ function FileBody(props: {
         </div>
       </div>
     )
-  if (t.kind === 'image') return <ImagePreview src={t.dataUrl!} size={t.size} name={basename(t.path)} />
+  if (t.kind === 'image') return <ImagePreview src={t.dataUrl!} size={t.size} name={basename(t.path)} path={t.path} />
   if (t.kind === 'pdf') return <PdfPreview dataUrl={t.dataUrl!} />
   if (t.mode === 'preview') {
     const doc = editorStates.get(key)?.doc.toString() ?? ''
-    if (extOf(t.path) === 'svg') return <ImagePreview src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(doc)}`} size={t.size} name={basename(t.path)} />
+    if (extOf(t.path) === 'svg') return <ImagePreview src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(doc)}`} size={t.size} name={basename(t.path)} path={t.path} />
+    if (isHtmlExt(extOf(t.path))) return <HtmlPreview path={t.path} version={t.mtime} dirty={t.dirty} />
     return (
       <div className="files-md-preview">
         <Markdown text={doc} onOpenFile={props.onOpenLink} />
@@ -1770,11 +1877,141 @@ function FileBody(props: {
       wrap={props.wrap}
       readOnly={props.readOnly}
       label={`Editor: ${basename(t.path)}`}
+      annotations={props.annotations}
+      onNavigate={props.onNavigate}
     />
   )
 }
 
-function ImagePreview(props: { src: string; size?: number; name: string }) {
+/**
+ * Live preview of a saved HTML file in a sandboxed iframe (scripts run, no
+ * same-origin access to the app). Relative assets load from the file's folder.
+ * Reloads when the file is saved or changes on disk.
+ */
+function HtmlPreview({ path, version, dirty }: { path: string; version?: number; dirty: boolean }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [nonce, setNonce] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    setUrl(null)
+    void window.odex.preview
+      .url(path)
+      .then((u) => !cancelled && setUrl(u))
+      .catch(() => !cancelled && setUrl(''))
+    return () => {
+      cancelled = true
+    }
+  }, [path])
+  if (url === null)
+    return (
+      <div className="empty">
+        <span className="spinner" />
+      </div>
+    )
+  if (!url) return <div className="empty">Preview unavailable.</div>
+  return (
+    <div className="files-html">
+      <div className="files-html-bar xs">
+        <span className="grow ellipsis subtle">{dirty ? 'Showing the saved file. Save (Ctrl+S) to refresh the preview.' : 'Live preview · scripts run sandboxed'}</span>
+        <button className="icon-btn sm" aria-label="Reload preview" title="Reload preview" onClick={() => setNonce((n) => n + 1)}>
+          <RefreshCw size={12} />
+        </button>
+      </div>
+      <iframe className="files-html-frame" title="HTML preview" sandbox="allow-scripts" src={`${url}?v=${Math.round(version ?? 0)}.${nonce}`} />
+    </div>
+  )
+}
+
+/** Lines the agent added or changed in a file during the selected thread (from its file-change diffs). */
+function useAgentEdits(path: string | undefined, version: number | undefined): LineAnnotation[] | undefined {
+  const turns = useApp((s) => (s.selectedThreadId ? s.threads[s.selectedThreadId]?.turns : undefined))
+  const cwd = useApp((s) => (s.selectedThreadId ? s.threads[s.selectedThreadId]?.thread.cwd : undefined))
+  return useMemo(() => (path && turns && cwd ? agentEditAnnotations(turns, cwd, path) : undefined),
+    // `version` re-applies the markers after the document is reloaded from disk
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [turns, cwd, path, version])
+}
+
+/** Hunks of a unified diff. */
+function parseHunks(diff: string): Array<{ oldStart: number; oldLen: number; lines: string[] }> {
+  const out: Array<{ oldStart: number; oldLen: number; lines: string[] }> = []
+  let cur: { oldStart: number; oldLen: number; lines: string[] } | null = null
+  for (const line of diff.split('\n')) {
+    const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line)
+    if (m) {
+      cur = { oldStart: Number(m[1]), oldLen: m[2] === undefined ? 1 : Number(m[2]), lines: [] }
+      out.push(cur)
+    } else if (cur && (line.startsWith(' ') || line.startsWith('+') || line.startsWith('-'))) {
+      cur.lines.push(line)
+    }
+  }
+  return out
+}
+
+/** Carry line marks (line → label) through one diff and mark its added lines. */
+function applyDiff(marks: Map<number, string>, diff: string, label: string): Map<number, string> {
+  const hunks = parseHunks(diff)
+  const next = new Map<number, string>()
+  // old line → new line for lines outside every hunk
+  const shift = (old: number): number | null => {
+    let delta = 0
+    for (const h of hunks) {
+      // a pure insertion (`-n,0`) goes after old line n and covers no old lines
+      const lastOld = h.oldLen === 0 ? h.oldStart : h.oldStart + h.oldLen - 1
+      if (h.oldLen > 0 && old >= h.oldStart && old <= lastOld) return null // inside a hunk: handled below
+      if (old > lastOld) delta += h.lines.filter((l) => l[0] === '+').length - h.lines.filter((l) => l[0] === '-').length
+    }
+    return old + delta
+  }
+  for (const [old, lbl] of marks) {
+    const n = shift(old)
+    if (n !== null) next.set(n, lbl)
+  }
+  let delta = 0
+  for (const h of hunks) {
+    let oldLine = h.oldLen === 0 ? h.oldStart + 1 : h.oldStart
+    let newLine = oldLine + delta
+    for (const l of h.lines) {
+      if (l[0] === ' ') {
+        const prev = marks.get(oldLine)
+        if (prev) next.set(newLine, prev)
+        oldLine++
+        newLine++
+      } else if (l[0] === '-') {
+        oldLine++
+      } else {
+        next.set(newLine, label)
+        newLine++
+      }
+    }
+    delta += h.lines.filter((l) => l[0] === '+').length - h.lines.filter((l) => l[0] === '-').length
+  }
+  return next
+}
+
+/** Gutter annotations for the lines the agent edited in `path`, oldest edit first. */
+export function agentEditAnnotations(turns: Turn[], cwd: string, path: string): LineAnnotation[] {
+  const target = k(path)
+  let marks = new Map<number, string>()
+  turns.forEach((turn, ti) => {
+    for (const item of turn.items) {
+      if (item.type !== 'fileChange' || item.status !== 'completed') continue
+      for (const c of item.changes) {
+        const p = isAbs(c.path) ? c.path : join(cwd, c.path)
+        const moved = c.movePath ? (isAbs(c.movePath) ? c.movePath : join(cwd, c.movePath)) : null
+        if (k(p) !== target && (!moved || k(moved) !== target)) continue
+        if (c.kind === 'delete') {
+          marks = new Map()
+          continue
+        }
+        marks = applyDiff(marks, c.diff, `Changed by the agent (turn ${ti + 1})`)
+      }
+    }
+  })
+  return [...marks].map(([line, label]) => ({ line, label }))
+}
+
+function ImagePreview(props: { src: string; size?: number; name: string; path: string }) {
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null)
   const [actual, setActual] = useState(false)
   return (
@@ -1783,9 +2020,14 @@ function ImagePreview(props: { src: string; size?: number; name: string }) {
         <img src={props.src} alt={props.name} onLoad={(e) => setDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} draggable={false} />
       </div>
       <div className="files-image-meta xs subtle">
-        {dims ? `${dims.w} × ${dims.h}` : ''}
-        {props.size !== undefined ? ` · ${formatSize(props.size)}` : ''}
-        {` · ${actual ? 'actual size' : 'fit'}`}
+        <span>
+          {dims ? `${dims.w} × ${dims.h}` : ''}
+          {props.size !== undefined ? ` · ${formatSize(props.size)}` : ''}
+          {` · ${actual ? 'actual size' : 'fit'}`}
+        </span>
+        <button className="btn btn-sm btn-ghost files-image-save" aria-label={`Save ${props.name} as`} title="Save a copy as…" onClick={() => void saveFileCopy(props.path)}>
+          <Download size={12} /> Save as…
+        </button>
       </div>
     </div>
   )

@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
-import type { ContextStatus } from '@shared/index'
+import { Copy } from 'lucide-react'
+import type { ContextStatus, Thread } from '@shared/index'
 import { useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import { Modal, formatTokens } from '@/components/ui'
+import * as A from '@/lib/actions'
+import '@/styles/thread-nav.css'
 
 const CATS: Array<[keyof ContextStatus['breakdown'], string, string]> = [
   ['system', 'System prompt', '#64748b'],
@@ -15,6 +18,71 @@ const CATS: Array<[keyof ContextStatus['breakdown'], string, string]> = [
   ['toolOutputs', 'Tool output', '#ca8a04'],
   ['images', 'Images', '#0891b2'],
 ]
+
+/** `/status` header: thread id, model, endpoint, server version, token usage. */
+function StatusHeader({ thread, ctxModel }: { thread: Thread; ctxModel?: string | null }) {
+  const models = useApp((s) => s.models)
+  const roles = useApp((s) => s.roles)
+  const providers = useApp((s) => s.providers)
+  const key = ctxModel ?? thread.model ?? roles.main ?? null
+  const m = key ? models.find((x) => x.key === key || x.modelId === key) : undefined
+  const prov = providers.find((p) => p.id === (m?.providerId ?? key?.split(':')[0]))
+  const u = thread.usage
+  return (
+    <dl className="ctx-status" aria-label="Thread status">
+      <dt>Thread</dt>
+      <dd>
+        <span className="mono selectable" title={thread.id}>
+          {thread.id}
+        </span>
+        <button className="icon-btn sm" aria-label="Copy thread id" title="Copy thread id" onClick={() => A.copy(thread.id, 'Thread id copied')}>
+          <Copy size={12} />
+        </button>
+      </dd>
+      <dt>Model</dt>
+      <dd>
+        <span className="selectable">{m?.displayName && m.displayName !== m.modelId ? `${m.displayName} (${m.modelId})` : (m?.modelId ?? key ?? 'none')}</span>
+        {thread.model ? <span className="badge">thread</span> : <span className="badge">default</span>}
+        {m && !m.available && <span className="badge warning">not served</span>}
+      </dd>
+      <dt>Endpoint</dt>
+      <dd>
+        {prov ? (
+          <>
+            <span className="mono selectable" title={prov.baseUrl}>
+              {prov.baseUrl}
+            </span>
+            <span className={`badge ${prov.health === 'healthy' ? 'success' : prov.health === 'unreachable' ? 'danger' : prov.health === 'degraded' ? 'warning' : ''}`}>{prov.health}</span>
+          </>
+        ) : (
+          <span className="muted">not configured</span>
+        )}
+      </dd>
+      <dt>Server</dt>
+      <dd className="selectable">{prov ? `${prov.name}${prov.version ? ` · vLLM ${prov.version}` : ' · version unknown'}` : '—'}</dd>
+      <dt>Tokens used</dt>
+      <dd>
+        <span className="ctx-usage" aria-label="Token usage">
+          <span>
+            input <b>{formatTokens(u.inputTokens)}</b>
+          </span>
+          <span>
+            cached <b>{formatTokens(u.cachedInputTokens)}</b>
+          </span>
+          <span>
+            output <b>{formatTokens(u.outputTokens)}</b>
+          </span>
+          {u.reasoningTokens > 0 && (
+            <span>
+              reasoning <b>{formatTokens(u.reasoningTokens)}</b>
+            </span>
+          )}
+          <span className="subtle">total {formatTokens(u.totalTokens)}</span>
+        </span>
+      </dd>
+    </dl>
+  )
+}
 
 /** Context engine status: usage bar, breakdown, thresholds, compaction log. */
 export function ContextView() {
@@ -38,8 +106,8 @@ export function ContextView() {
   const close = () => setUi({ contextViewOpen: false })
   if (!id || !ctx) {
     return (
-      <Modal title="Context" onClose={close}>
-        <div className="muted">Open a thread to see its context.</div>
+      <Modal title="Status" onClose={close}>
+        {thread ? <StatusHeader thread={thread} /> : <div className="muted">Open a thread to see its status and context.</div>}
       </Modal>
     )
   }
@@ -52,7 +120,7 @@ export function ContextView() {
   ]
   return (
     <Modal
-      title="Context"
+      title="Status & context"
       onClose={close}
       wide
       footer={
@@ -77,6 +145,7 @@ export function ContextView() {
         </>
       }
     >
+      {thread && <StatusHeader thread={thread} ctxModel={ctx.model} />}
       <div className="row small" style={{ marginBottom: 8 }}>
         <b>{formatTokens(ctx.used)}</b>
         <span className="muted">

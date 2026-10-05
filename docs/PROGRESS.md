@@ -81,7 +81,11 @@ The suite has been verified against `odex-mock-vllm` with a rules file. It has *
 
 ## Desktop e2e coverage
 
-`desktop/e2e/` (64 tests: 63 pass on Windows, 1 opt-in screenshot test skips): onboarding, thread end to end, approvals (exec escalation), plan mode, `/compact`, terminal, `!cmd`, edit and resend, find, project actions, undo, deep links, review pane (stage/revert/comment, hunks, big diffs, hand-off), files and editor, browser panel and agent browser use, MCP/skills/plugins/hooks, all settings panels with persistence, automations and Activity, and visual snapshots of home and thread in light and dark.
+`desktop/e2e/` (118 tests: 117 pass on Windows, 1 opt-in screenshot test skips): onboarding, composer (drag-drop, grouped `@` mentions, `/` mid-draft, branch/environment chips, starter prompts), goal pause/resume/edit, model-change warnings, rollback/redo, `/status` and `/doctor`, Mermaid, lightbox, Ask Odex, Git settings and PR flows against a fake GitHub, environments/worktree retention/move-to-worktree, background sessions, side-panel layout, HTML preview, summary card, always-allow rules, MCP instructions, Quick Chat, thread end to end, approvals (exec escalation), plan mode, `/compact`, terminal, `!cmd`, edit and resend, find, project actions, undo, deep links, review pane (stage/revert/comment, hunks, big diffs, hand-off), files and editor, browser panel and agent browser use, MCP/skills/plugins/hooks, all settings panels with persistence, automations and Activity, and visual snapshots of home and thread in light and dark.
+
+## Parity
+
+A full audit of every keep/adapt/add row in `docs/PARITY.md` (205 rows) found 70 partial or missing rows; all were implemented in the follow-up round except three, which are marked **Deferred** in PARITY.md with reasons: macOS/Linux computer use, in-app self-update, and the Landlock fallback sandbox.
 
 ## Next
 
@@ -91,6 +95,11 @@ The suite has been verified against `odex-mock-vllm` with a rules file. It has *
 4. Stretch goals (PROMPT §1): SSH remote projects, `/ide-context`, thread sections, permanent worktree projects.
 
 ## Known issues / gaps
+
+- PR badges refresh when a PR is created or viewed in the Git panel; there is no background polling of PR/check status. `gh` code paths are untested here (`gh` isn't installed); the REST paths are tested against a fake GitHub (`ODEX_GITHUB_API`).
+- Dev-server URLs are auto-opened from agent `exec_command` sessions and project actions, not from interactive terminals or the one-shot `shell` tool.
+- Model-change warnings are re-checked for loaded threads after an endpoint refresh; other threads are checked when opened or on their next turn.
+- The computer-use part of the `@` menu lists real desktop windows, so it isn't e2e-tested.
 
 - The real vLLM endpoint provided for testing (`http://192.168.50.220:8080/v1`) has been unreachable from this machine since the session started (connect timeout, ping fails). The machine is on the same LAN (192.168.50.40), but a full-tunnel VPN interface ("desktop", routes 0.0.0.0/1 + 128.0.0.0/1) captures the traffic, and ARP for the host is incomplete. Everything so far is tested against the mock. Re-run `odex-engine --base-url http://192.168.50.220:8080/v1 doctor` when it is reachable.
 - The restricted-token sandbox doesn't isolate the network (D-017). Some tools that spawn children inside the sandbox (e.g. node `child_process`) fail with EPERM; the engine offers a retry without the sandbox.

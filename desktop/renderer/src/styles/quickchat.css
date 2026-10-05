@@ -1,0 +1,15 @@
+/* Quick Chat window: compact chrome around the thread view. */
+
+.quick-chat .titlebar {
+  padding-right: 140px; /* window controls overlay */
+}
+.quick-chat .titlebar.mac {
+  padding-right: 8px;
+}
+.quick-chat .thread-inner,
+.quick-chat .composer-area .inner {
+  max-width: none;
+}
+.quick-chat .center-main > .empty {
+  flex: 1;
+}

@@ -4,4 +4,9 @@ export type OpenUrlNotification = { url: string,
 /**
  * `external` (system browser) or `inApp`.
  */
-target: string, };
+target: string, 
+/**
+ * Why it opens: `devServer` for a local URL detected in an agent's process output
+ * (the desktop honors its "open dev server URLs" setting for these).
+ */
+source?: string | null, };

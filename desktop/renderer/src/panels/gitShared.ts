@@ -1,4 +1,4 @@
-import type { DiffTarget, Project, Thread } from '@shared/index'
+import type { DiffFile, DiffTarget, Project, Thread } from '@shared/index'
 import { useApp } from '@/store/app'
 
 /** Shared helpers for the review and git panels. */
@@ -73,12 +73,12 @@ export function friendlyGitError(raw: string): string {
   const l = m.toLowerCase()
   if (l.includes('git executable not found')) return 'Git is not installed or not on PATH. Install Git and restart Odex.'
   if (l.includes('gh auth login') || l.includes('not logged into') || l.includes('authentication required') || l.includes('bad credentials') || l.includes('http 401') || l.includes('error 401'))
-    return 'The GitHub CLI is not signed in. Run `gh auth login` in a terminal (or set GITHUB_TOKEN), then retry.'
+    return 'GitHub rejected the credentials. Check the token in Settings → Git, or run `gh auth login` in a terminal, then retry.'
   if (l.includes('github token is required'))
-    return 'GitHub access is not set up. Install the GitHub CLI (gh) and run `gh auth login`, or set GITHUB_TOKEN / GH_TOKEN before starting Odex.'
-  if (l.includes('rate limit')) return 'GitHub API rate limit reached. Sign in with the GitHub CLI (`gh auth login`) or set GITHUB_TOKEN to raise the limit.'
+    return 'GitHub access is not set up. Add a token in Settings → Git, or install the GitHub CLI (gh) and run `gh auth login`.'
+  if (l.includes('rate limit')) return 'GitHub API rate limit reached. Add a token in Settings → Git (or sign in with `gh auth login`) to raise the limit.'
   if (l.includes('github api error 404') || l.includes('github api error 403'))
-    return 'GitHub denied access: the repository is private, missing, or the token lacks permission. Sign in with `gh auth login` or set GITHUB_TOKEN.'
+    return 'GitHub denied access: the repository is private, missing, or the token lacks permission. Check the token in Settings → Git, or sign in with `gh auth login`.'
   if (l.includes('not a github remote') || l.includes('no git remotes') || l.includes("no such remote 'origin'") || l.includes('none of the git remotes') || (l.includes('remote get-url') && l.includes('origin')))
     return 'This repository has no GitHub remote named origin. Add one (git remote add origin …) to work with pull requests.'
   if (l.includes('must first push') || l.includes('no commits between') || l.includes('could not find any commits'))
@@ -110,4 +110,50 @@ export function takeReviewRequest(): { target: DiffTarget; path?: string } | nul
   const r = pendingReview
   pendingReview = null
   return r && Date.now() - r.at < 10_000 ? r : null
+}
+
+/** This window is a detached review pop-out (`?panel=review`). */
+export function isDetachedReviewWindow(): boolean {
+  return new URLSearchParams(location.search).get('panel') === 'review'
+}
+
+/**
+ * "Open review" (Ctrl+Shift+G): the review tab of the side panel, or a pop-out window with only
+ * the review panel when Settings → Code review → delivery is "detached".
+ */
+export function openReview(): void {
+  const s = useApp.getState()
+  const threadId = s.ui.view === 'thread' ? s.selectedThreadId : null
+  if (s.settings?.reviewDelivery === 'detached' && threadId && !isDetachedReviewWindow()) {
+    void window.odex.win.newWindow(threadId, 'review')
+    return
+  }
+  s.setUi({ sidePanelOpen: true, sidePanelTab: 'review' })
+}
+
+/** First changed line of a file diff on the new side (for "open at change"). */
+export function firstChangedLine(f: DiffFile): number | undefined {
+  for (const h of f.hunks) {
+    for (const l of h.lines) if (l.kind === 'add' && l.newNo != null) return l.newNo
+    for (const l of h.lines) if (l.kind === 'del') return Math.max(1, h.newStart)
+  }
+  return f.hunks[0]?.newStart || undefined
+}
+
+// ------------------------------------------------------------------ pull requests
+
+/** Badge style for a PR state. */
+export const PR_STATE_CLASS: Record<string, string> = { open: 'success', draft: '', merged: 'accent', closed: 'danger' }
+
+/** The message that asks the agent to fix a failing check, with its (capped) log. */
+export function fixCheckMessage(check: string, pr: { number: number; title?: string | null; head?: string | null } | null, log: string, truncated: boolean): string {
+  const where = pr ? ` on pull request #${pr.number}${pr.title ? ` (${pr.title})` : ''}${pr.head ? `, branch ${pr.head}` : ''}` : ''
+  return [
+    `The CI check "${check}" failed${where}. Find the cause and fix it, then tell me what you changed.`,
+    '',
+    `Check output${truncated ? ' (trimmed to the most relevant part)' : ''}:`,
+    '```text',
+    log.replace(/```/g, '`​``'),
+    '```',
+  ].join('\n')
 }

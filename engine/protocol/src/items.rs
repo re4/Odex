@@ -15,15 +15,24 @@ pub struct WorktreeInfo {
     pub base_commit: Option<String>,
     /// The local checkout the worktree belongs to.
     pub repo_root: String,
+    /// Environment setup script state: `running`, `ok`, `failed…` (none without a script).
     pub setup_status: Option<String>,
+    /// Log file with the setup script's full output.
+    #[serde(default)]
+    pub setup_log: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Goal {
     pub objective: String,
-    /// `active`, `done`, `blocked`, `budgetExhausted`, `cleared`.
+    /// `active`, `paused`, `done`, `blocked`, `budgetExhausted`, `cleared`.
     pub status: String,
+    /// When the goal was paused (`thread/goal/pause`); paused time does not
+    /// count against the time budget.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub paused_at: Option<i64>,
     #[ts(type = "number")]
     pub started_at: i64,
     pub time_budget_secs: Option<u32>,
@@ -33,6 +42,32 @@ pub struct Goal {
     pub tokens_used: u64,
     pub turns: u32,
     pub last_update: Option<String>,
+}
+
+/// The model a thread's last turn ran on (for downgrade detection).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUse {
+    pub key: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub context_window: u32,
+}
+
+/// The endpoint no longer serves what the thread was using: the model is
+/// gone, the default model changed, or its context window shrank.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelWarning {
+    /// `notServed`, `modelChanged`, `windowShrank`.
+    pub code: String,
+    pub message: String,
+    /// What the endpoint serves instead (a same-family model when there is one).
+    pub served_model: Option<String>,
+    pub previous_window: Option<u32>,
+    pub window: Option<u32>,
+    #[ts(type = "number")]
+    pub at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -67,6 +102,36 @@ pub struct Thread {
     pub diff_stats: Option<DiffStats>,
     pub usage: TokenUsage,
     pub last_error: Option<String>,
+    /// Model and context window the last turn ran with.
+    #[serde(default)]
+    pub last_model: Option<ModelUse>,
+    /// Set when the served model or its window changed under this thread.
+    #[serde(default)]
+    pub model_warning: Option<ModelWarning>,
+    /// The pull request opened from (or found for) this thread's branch.
+    #[serde(default)]
+    pub pr: Option<ThreadPr>,
+    /// Environment (`.odex/environments.toml` id) whose variables and setup script this thread
+    /// uses. `None` = the project's default environment (else its first one); `""` = none.
+    #[serde(default)]
+    pub environment_id: Option<String>,
+}
+
+/// Pull-request summary kept on a thread for status badges.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadPr {
+    pub number: u32,
+    /// `open`, `draft`, `merged`, `closed`.
+    pub state: String,
+    pub url: String,
+    pub title: Option<String>,
+    /// Combined check state: `success`, `failure`, `pending`; none without checks.
+    pub checks: Option<String>,
+    #[serde(default)]
+    pub failed_checks: u32,
+    #[ts(type = "number")]
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

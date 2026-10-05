@@ -1,56 +1,180 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ChevronDown, ChevronUp, ExternalLink, GitBranch, MoreHorizontal, Pause, Pin, Target, X } from 'lucide-react'
-import type { ThreadItem } from '@shared/index'
+import { AlertTriangle, ChevronDown, ChevronUp, ExternalLink, GitBranch, MoreHorizontal, Pause, Pencil, Pin, Play, Target, X } from 'lucide-react'
+import type { Goal, ThreadItem } from '@shared/index'
 import { threadItems, useApp } from '@/store/app'
-import { call } from '@/lib/rpc'
+import { call, toast } from '@/lib/rpc'
 import { ItemView } from '@/views/items'
 import { ApprovalCard } from '@/views/ApprovalCard'
 import { Composer } from '@/views/Composer'
 import { ProjectActions } from '@/views/ProjectActions'
-import { Menu } from '@/components/ui'
+import { openReview } from '@/panels/gitShared'
+import { PrBadge } from '@/panels/PrBadge'
+import { Menu, Modal } from '@/components/ui'
 import { threadMenu } from '@/views/Sidebar'
 import * as A from '@/lib/actions'
+import '@/styles/thread-nav.css'
+
+const GOAL_BADGE: Record<string, string> = { active: 'accent', paused: 'warning', done: 'success', blocked: 'danger', budgetExhausted: 'warning' }
+const GOAL_LABEL: Record<string, string> = { budgetExhausted: 'budget used up' }
+
+function goalElapsed(goal: Goal): number | null {
+  if (goal.status === 'active') return Math.max(0, Math.floor((Date.now() - goal.startedAt) / 1000))
+  if (goal.status === 'paused' && goal.pausedAt) return Math.max(0, Math.floor((goal.pausedAt - goal.startedAt) / 1000))
+  return null
+}
 
 function GoalRow({ threadId }: { threadId: string }) {
   const goal = useApp((s) => s.threads[threadId]?.thread.goal)
+  const [editing, setEditing] = useState(false)
   const [, tick] = useState(0)
+  const active = goal?.status === 'active'
   useEffect(() => {
+    if (!active) return
     const t = setInterval(() => tick((x) => x + 1), 1000)
     return () => clearInterval(t)
-  }, [])
+  }, [active])
   if (!goal || goal.status === 'cleared') return null
-  const secs = Math.floor((Date.now() - goal.startedAt) / 1000)
-  const fmt = `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m ${secs % 60}s`
+  const secs = goalElapsed(goal)
+  const run = (m: 'thread/goal/pause' | 'thread/goal/resume' | 'thread/goal/clear') => void call(m, { threadId }).catch((e: Error) => toast(e.message, 'error'))
+  const parts = [
+    secs != null ? `${A.formatDuration(secs)}${goal.timeBudgetSecs ? ` / ${A.formatDuration(goal.timeBudgetSecs)}` : ''}` : goal.timeBudgetSecs ? `${A.formatDuration(goal.timeBudgetSecs)} budget` : '',
+    `${goal.turns} ${goal.turns === 1 ? 'turn' : 'turns'}`,
+    `${A.formatTokenCount(goal.tokensUsed)}${goal.tokenBudget ? ` / ${A.formatTokenCount(goal.tokenBudget)}` : ''} tok`,
+  ].filter(Boolean)
   return (
-    <div className="goal-row" role="status">
+    <div className={`goal-row ${goal.status}`} role="status" aria-label="Goal">
       <Target size={14} color="var(--accent)" />
-      <span className="ellipsis grow" title={goal.objective}>
+      <span className="ellipsis grow" title={goal.lastUpdate ? `${goal.objective}\n\nLast update: ${goal.lastUpdate}` : goal.objective}>
         <b>Goal:</b> {goal.objective}
       </span>
-      <span className={`badge ${goal.status === 'done' ? 'success' : goal.status === 'active' ? 'accent' : 'warning'}`}>{goal.status}</span>
-      <span className="xs subtle">
-        {goal.status === 'active' ? fmt : ''} · {goal.turns} turns · {Math.round(goal.tokensUsed / 1000)}k tok
-        {goal.timeBudgetSecs ? ` / ${Math.round(goal.timeBudgetSecs / 60)}m` : ''}
+      <span className={`badge ${GOAL_BADGE[goal.status] ?? ''}`}>{GOAL_LABEL[goal.status] ?? goal.status}</span>
+      <span className="xs subtle" style={{ whiteSpace: 'nowrap' }}>
+        {parts.join(' · ')}
       </span>
-      {goal.status === 'active' && (
-        <button className="icon-btn sm" title="Pause goal (stop the turn)" aria-label="Pause goal" onClick={() => void A.interrupt(threadId)}>
-          <Pause size={13} />
+      <span className="goal-actions">
+        {goal.status === 'active' && (
+          <button className="icon-btn sm" title="Pause goal (stops the turn; resume later)" aria-label="Pause goal" onClick={() => run('thread/goal/pause')}>
+            <Pause size={13} />
+          </button>
+        )}
+        {(goal.status === 'paused' || goal.status === 'blocked') && (
+          <button className="icon-btn sm" title="Resume goal" aria-label="Resume goal" onClick={() => run('thread/goal/resume')}>
+            <Play size={13} />
+          </button>
+        )}
+        <button className="icon-btn sm" title="Edit goal and budgets" aria-label="Edit goal" onClick={() => setEditing(true)}>
+          <Pencil size={13} />
         </button>
-      )}
-      <button className="icon-btn sm" title="Clear goal" aria-label="Clear goal" onClick={() => void call('thread/goal/clear', { threadId })}>
-        <X size={13} />
-      </button>
+        <button className="icon-btn sm" title="Clear goal" aria-label="Clear goal" onClick={() => run('thread/goal/clear')}>
+          <X size={13} />
+        </button>
+      </span>
+      {editing && <GoalEditor threadId={threadId} goal={goal} onClose={() => setEditing(false)} />}
     </div>
   )
 }
 
-/** Warn when the thread's model is not served by any endpoint right now. */
-function ModelWarning({ modelKey }: { modelKey: string | null }) {
+function GoalEditor({ threadId, goal, onClose }: { threadId: string; goal: Goal; onClose: () => void }) {
+  const [objective, setObjective] = useState(goal.objective)
+  const [time, setTime] = useState(goal.timeBudgetSecs ? A.formatDuration(goal.timeBudgetSecs) : '')
+  const [tokens, setTokens] = useState(goal.tokenBudget ? A.formatTokenCount(goal.tokenBudget) : '')
+  const [busy, setBusy] = useState(false)
+  const timeSecs = time.trim() ? A.parseDuration(time) : null
+  const tokenN = tokens.trim() ? A.parseTokenCount(tokens) : null
+  const timeBad = !!time.trim() && timeSecs === null
+  const tokensBad = !!tokens.trim() && tokenN === null
+  const reopens = goal.status === 'done' || goal.status === 'blocked' || goal.status === 'budgetExhausted'
+  const save = async () => {
+    if (!objective.trim() || timeBad || tokensBad) return
+    setBusy(true)
+    try {
+      await call('thread/goal/set', { threadId, objective: objective.trim(), timeBudgetSecs: timeSecs, tokenBudget: tokenN, edit: true })
+      onClose()
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const secs = goalElapsed(goal)
+  return (
+    <Modal
+      title="Edit goal"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" disabled={busy || !objective.trim() || timeBad || tokensBad} onClick={() => void save()}>
+            {reopens ? 'Save and resume' : 'Save'}
+          </button>
+        </>
+      }
+    >
+      <div className="goal-form" onKeyDown={(e) => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && void save()}>
+        <div className="field span2">
+          <label htmlFor="goal-objective">Objective</label>
+          <textarea id="goal-objective" className="textarea" style={{ minHeight: 80 }} value={objective} onChange={(e) => setObjective(e.target.value)} aria-label="Goal objective" />
+        </div>
+        <div className="field">
+          <label htmlFor="goal-time">Time budget</label>
+          <input id="goal-time" className="input" placeholder="none (e.g. 30m, 1h30m)" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Time budget" aria-invalid={timeBad} />
+          {timeBad ? <span className="err">Use a duration like 30m, 1h30m or 90s</span> : <span className="hint">Paused time does not count.</span>}
+        </div>
+        <div className="field">
+          <label htmlFor="goal-tokens">Token budget</label>
+          <input id="goal-tokens" className="input" placeholder="none (e.g. 200k, 1.5m)" value={tokens} onChange={(e) => setTokens(e.target.value)} aria-label="Token budget" aria-invalid={tokensBad} />
+          {tokensBad ? <span className="err">Use a count like 200k or 1.5m</span> : <span className="hint">Total tokens across goal turns.</span>}
+        </div>
+        <div className="goal-progress span2">
+          <span>Status: {GOAL_LABEL[goal.status] ?? goal.status}</span>
+          {secs != null && <span>Elapsed: {A.formatDuration(secs)}</span>}
+          <span>Turns: {goal.turns}</span>
+          <span>Tokens used: {A.formatTokenCount(goal.tokensUsed)}</span>
+        </div>
+        {reopens && <div className="hint span2">Saving reopens the goal and the agent continues working on it.</div>}
+      </div>
+    </Modal>
+  )
+}
+
+/** Warn when the thread's model changed under it (engine check) or is not served right now. */
+function ModelWarning({ threadId }: { threadId: string }) {
+  const thread = useApp((s) => s.threads[threadId]?.thread)
   const models = useApp((s) => s.models)
   const roles = useApp((s) => s.roles)
   const providers = useApp((s) => s.providers)
-  const key = modelKey ?? roles.main ?? null
+  const [dismissed, setDismissed] = useState<number | null>(null)
+  if (!thread) return null
+  const w = thread.modelWarning
+  const switchModel = () => window.dispatchEvent(new CustomEvent('odex:open-picker', { detail: 'model' }))
+  if (w && dismissed !== w.at) {
+    const alt = w.servedModel ? models.find((m) => m.available && (m.modelId === w.servedModel || m.key === w.servedModel)) : undefined
+    return (
+      <div className="banner model-warning" role="alert" aria-label="Model warning">
+        <AlertTriangle size={14} className="mw-icon" />
+        <span className="grow small selectable">
+          <b>{w.code === 'windowShrank' ? 'Context window shrank' : w.code === 'modelChanged' ? 'Model changed' : 'Model not served'}.</b> {w.message}
+        </span>
+        <span className="mw-actions">
+          {alt && w.code === 'notServed' && (
+            <button className="btn btn-sm" onClick={() => void call('thread/update', { threadId, model: alt.key }).catch((e: Error) => toast(e.message, 'error'))}>
+              Use {alt.displayName || alt.modelId}
+            </button>
+          )}
+          <button className="btn btn-sm" onClick={switchModel}>
+            Switch model
+          </button>
+          <button className="btn btn-sm btn-ghost" onClick={() => setDismissed(w.at)}>
+            Dismiss
+          </button>
+        </span>
+      </div>
+    )
+  }
+  const key = thread.model ?? roles.main ?? null
   if (!key || providers.length === 0) return null
   const m = models.find((x) => x.key === key || x.modelId === key)
   const prov = providers.find((p) => p.id === (m?.providerId ?? key.split(':')[0]))
@@ -61,7 +185,7 @@ function ModelWarning({ modelKey }: { modelKey: string | null }) {
       <span className="grow small">
         Model <b>{m?.displayName ?? key}</b> is unavailable: {why}.
       </span>
-      <button className="btn btn-sm" onClick={() => window.dispatchEvent(new CustomEvent('odex:open-picker', { detail: 'model' }))}>
+      <button className="btn btn-sm" onClick={switchModel}>
         Switch model
       </button>
       <button className="btn btn-sm btn-ghost" onClick={() => void useApp.getState().refreshModels(true)}>
@@ -343,10 +467,11 @@ export function ThreadView() {
             setup {t.worktree.setupStatus.startsWith('failed') ? 'failed' : t.worktree.setupStatus}
           </span>
         )}
+        {t.pr && <PrBadge pr={t.pr} onClick={() => setUi({ sidePanelOpen: true, sidePanelTab: 'git' })} />}
         <span className="spacer" />
         <ProjectActions projectId={t.projectId} threadId={t.id} cwd={t.worktree?.path ?? t.cwd} />
         {t.diffStats && t.diffStats.filesChanged > 0 && (
-          <button className="chip" onClick={() => setUi({ sidePanelOpen: true, sidePanelTab: 'review' })} title="Open review (Ctrl+Shift+G)">
+          <button className="chip" onClick={() => openReview()} title="Open review (Ctrl+Shift+G)">
             {t.diffStats.filesChanged} {t.diffStats.filesChanged === 1 ? 'file' : 'files'} <span className="text-add">+{t.diffStats.additions}</span> <span className="text-del">-{t.diffStats.deletions}</span>
           </button>
         )}
@@ -427,7 +552,7 @@ export function ThreadView() {
       </div>
       <div className="composer-area">
         <div className="inner">
-          <ModelWarning modelKey={t.model ?? null} />
+          <ModelWarning threadId={id} />
           <GoalRow threadId={id} />
           <Queued threadId={id} />
           {!running && ts.followups.length > 0 && (

@@ -53,7 +53,7 @@ impl EventSink for TestSink {
             let p: ApprovalRequestParams = serde_json::from_value(params)?;
             let d = (self.decide.lock().unwrap())(&p);
             self.approvals.lock().unwrap().push(p);
-            return Ok(serde_json::to_value(ApprovalResponse { decision: d })?);
+            return Ok(serde_json::to_value(ApprovalResponse { decision: d, persist: None })?);
         }
         anyhow::bail!("unsupported {method}")
     }

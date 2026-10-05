@@ -1,0 +1,262 @@
+/* Thread navigation extras: Ask Odex, image lightbox, goal editor, message
+   actions (fork menu, roll back), context header, mermaid diagrams. */
+
+/* ---------- Ask Odex (floating button on a selection) */
+.ask-odex {
+  position: fixed;
+  z-index: 950;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--bg-elev);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  white-space: nowrap;
+  animation: fadein var(--transition);
+}
+.ask-odex svg {
+  color: var(--accent);
+}
+.ask-odex:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-elev));
+}
+
+/* ---------- image lightbox */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 10, 16, 0.86);
+  color: #e6e7ec;
+  animation: fadein var(--transition);
+}
+.lightbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 42px;
+  padding: 0 10px 0 16px;
+  background: rgba(20, 22, 30, 0.92);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: var(--font-size-sm);
+}
+.lightbox-bar .icon-btn,
+.lightbox-bar .btn {
+  color: #e6e7ec;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.16);
+}
+.lightbox-bar .icon-btn:hover,
+.lightbox-bar .btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.lightbox-bar .btn.active {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.lightbox-dim {
+  color: rgba(230, 231, 236, 0.6);
+  margin-right: 8px;
+}
+.lightbox-pct {
+  min-width: 42px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.lightbox-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  cursor: zoom-out;
+}
+.lightbox-stage.pannable {
+  cursor: grab;
+}
+.lightbox-stage.pannable:active {
+  cursor: grabbing;
+}
+.lightbox-canvas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: max-content;
+  height: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 16px;
+  pointer-events: none;
+}
+.lightbox-canvas img {
+  display: block;
+  max-width: none;
+  pointer-events: auto;
+  cursor: inherit;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+  background: repeating-conic-gradient(#3a3d48 0% 25%, #2c2e37 0% 50%) 50% / 16px 16px;
+  user-select: none;
+}
+
+/* images in the conversation open the lightbox */
+.zoomable {
+  cursor: zoom-in;
+}
+.user-bubble .attachment img.zoomable:hover,
+.thumbs img.zoomable:hover {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 1px;
+}
+.attachment.image-attachment {
+  cursor: zoom-in;
+}
+.viewed-image {
+  max-width: 320px;
+  max-height: 220px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+/* ---------- goal row */
+.goal-row .goal-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.goal-row.paused {
+  background: color-mix(in srgb, var(--warning) 12%, var(--bg));
+}
+.goal-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+}
+.goal-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.goal-form .span2 {
+  grid-column: 1 / -1;
+}
+.goal-form label {
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+}
+.goal-form .hint {
+  font-size: var(--font-size-xs);
+  color: var(--fg-subtle);
+}
+.goal-form .err {
+  font-size: var(--font-size-xs);
+  color: var(--danger);
+}
+.goal-progress {
+  display: flex;
+  gap: 14px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-subtle);
+}
+
+/* ---------- model warning banner */
+.model-warning {
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border));
+  align-items: flex-start;
+}
+.model-warning .mw-icon {
+  color: var(--warning);
+  flex: none;
+  margin-top: 2px;
+}
+.model-warning .mw-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+/* ---------- rollback dialog */
+.rollback-preview {
+  margin: 8px 0 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  font-size: var(--font-size-sm);
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow: auto;
+}
+
+/* ---------- context view header (/status) */
+.ctx-status {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: center;
+  gap: 4px 14px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  font-size: var(--font-size-sm);
+}
+.ctx-status dt {
+  color: var(--fg-muted);
+}
+.ctx-status dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ctx-status dd .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-usage {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.ctx-usage b {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- mermaid diagrams in markdown */
+.mermaid-block {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+.mermaid-block .code-block-header {
+  border-bottom: 1px solid var(--border);
+}
+.mermaid-block .mermaid-svg {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  overflow: auto;
+}
+.mermaid-block .mermaid-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+.mermaid-block.pending .mermaid-svg {
+  color: var(--fg-subtle);
+  font-size: var(--font-size-sm);
+}

@@ -9,6 +9,7 @@ import {
   CircleX,
   Copy,
   FileText,
+  FolderGit2,
   GitFork,
   Globe,
   Info,
@@ -17,16 +18,18 @@ import {
   Pencil,
   Plug,
   RotateCcw,
+  Undo2,
   Search,
   Terminal,
   Wrench,
 } from 'lucide-react'
-import type { FileChange, ThreadItem, Turn } from '@shared/index'
+import type { FileChange, ThreadItem, Turn, UserInput } from '@shared/index'
 import { Markdown } from '@/components/Markdown'
-import { Identicon, basename, formatTokens } from '@/components/ui'
+import { Identicon, Menu, Modal, basename, formatTokens } from '@/components/ui'
 import { isRunning, useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import * as A from '@/lib/actions'
+import '@/styles/thread-nav.css'
 
 export function openFileInPanel(path: string, line?: number): void {
   useApp.setState({ fileToOpen: { path, line, at: Date.now() } })
@@ -150,6 +153,8 @@ function UserMessage({ item, turn, threadId }: { item: Extract<ThreadItem, { typ
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(text)
   const [restoreFiles, setRestoreFiles] = useState(false)
+  const [forkMenu, setForkMenu] = useState<HTMLElement | null>(null)
+  const [rollback, setRollback] = useState(false)
   const running = useApp((s) => isRunning(s.threads[threadId]?.thread))
   const resend = async () => {
     if (!draft.trim() && !extras.length) return
@@ -204,8 +209,16 @@ function UserMessage({ item, turn, threadId }: { item: Extract<ThreadItem, { typ
           {extras.length > 0 && (
             <div className="row" style={{ flexWrap: 'wrap', marginTop: text ? 6 : 0 }}>
               {extras.map((c, i) => (
-                <span key={i} className="attachment">
-                  {c.type === 'image' ? <img src={c.url} alt="" /> : c.type === 'appshot' ? <img src={c.image_url} alt="" /> : <FileText size={12} />}
+                <span
+                  key={i}
+                  className={`attachment ${imageOf(c) ? 'image-attachment' : ''}`}
+                  title={imageOf(c) ? 'View image' : undefined}
+                  role={imageOf(c) ? 'button' : undefined}
+                  tabIndex={imageOf(c) ? 0 : undefined}
+                  onClick={() => openAttachment(c)}
+                  onKeyDown={(e) => e.key === 'Enter' && openAttachment(c)}
+                >
+                  {c.type === 'image' ? <img className="zoomable" src={c.url} alt="" /> : c.type === 'appshot' ? <img className="zoomable" src={c.image_url} alt="" /> : <FileText size={12} />}
                   <span className="ellipsis">
                     {c.type === 'file' || c.type === 'mention' || c.type === 'localImage'
                       ? basename(c.path)
@@ -241,13 +254,92 @@ function UserMessage({ item, turn, threadId }: { item: Extract<ThreadItem, { typ
           >
             <Pencil size={12} />
           </button>
-          <button className="icon-btn sm" title="Fork from here" aria-label="Fork from here" onClick={() => void A.forkThread(threadId, turn.id)}>
+          <button className="icon-btn sm" title="Fork from here" aria-label="Fork from here" aria-haspopup="menu" onClick={(e) => setForkMenu(e.currentTarget)}>
             <GitFork size={12} />
+          </button>
+          <button className="icon-btn sm" title="Roll back to here" aria-label="Roll back to here" onClick={() => setRollback(true)}>
+            <Undo2 size={12} />
           </button>
         </div>
       </div>
+      {forkMenu && (
+        <Menu
+          anchor={forkMenu}
+          align="right"
+          onClose={() => setForkMenu(null)}
+          items={[
+            { label: 'Fork from here', header: true },
+            { label: 'To a new thread', icon: <GitFork size={13} />, hint: 'same folder', onSelect: () => void A.forkThread(threadId, turn.id, 'local') },
+            { label: 'To a new worktree', icon: <FolderGit2 size={13} />, hint: 'isolated branch', onSelect: () => void A.forkThread(threadId, turn.id, 'worktree') },
+          ]}
+        />
+      )}
+      {rollback && <RollbackDialog threadId={threadId} turn={turn} text={text} onClose={() => setRollback(false)} />}
     </div>
   )
+}
+
+/** Confirm "Roll back to here": drop this message and everything after it, optionally restoring files. */
+function RollbackDialog({ threadId, turn, text, onClose }: { threadId: string; turn: Turn; text: string; onClose: () => void }) {
+  const [restoreFiles, setRestoreFiles] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const later = useApp((s) => {
+    const turns = s.threads[threadId]?.turns ?? []
+    const i = turns.findIndex((t) => t.id === turn.id)
+    return i < 0 ? 0 : turns.length - i - 1
+  })
+  const go = async () => {
+    setBusy(true)
+    const ok = await A.rollbackTo(threadId, turn.id, restoreFiles)
+    setBusy(false)
+    if (!ok) return
+    // the message goes back into the composer so it can be edited (nothing is sent)
+    const st = useApp.getState()
+    if (!st.threads[threadId]?.draft?.trim()) st.patchThread(threadId, { draft: text })
+    onClose()
+  }
+  return (
+    <Modal
+      title="Roll back to here?"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn btn-danger" disabled={busy} onClick={() => void go()} autoFocus>
+            {restoreFiles ? 'Roll back and restore files' : 'Roll back'}
+          </button>
+        </>
+      }
+    >
+      <div className="small">
+        This message{later > 0 ? ` and the ${later} ${later === 1 ? 'turn' : 'turns'} after it` : ''} will be removed from the thread. Nothing is sent; the message goes back into the composer.
+      </div>
+      {text.trim() && <div className="rollback-preview selectable">{text.length > 600 ? `${text.slice(0, 600)}…` : text}</div>}
+      <label className="checkbox small">
+        <input type="checkbox" checked={restoreFiles} onChange={(e) => setRestoreFiles(e.target.checked)} aria-label="Also restore files" /> Also restore files to how they were before this message (from the undo snapshot)
+      </label>
+    </Modal>
+  )
+}
+
+/** The image an attachment shows, if any (for the lightbox). */
+function imageOf(c: UserInput): string | null {
+  if (c.type === 'image') return c.url
+  if (c.type === 'appshot') return c.image_url
+  if (c.type === 'localImage') return c.path
+  return null
+}
+
+function openAttachment(c: UserInput): void {
+  if (c.type === 'image') A.openImage(c.url, 'image')
+  else if (c.type === 'appshot') A.openImage(c.image_url, c.title || 'appshot')
+  else if (c.type === 'localImage')
+    void window.odex.fs
+      .read(c.path)
+      .then((r: { kind?: string; dataUrl?: string }) => (r.kind === 'media' && r.dataUrl ? A.openImage(r.dataUrl, basename(c.path)) : toast('Could not open the image', 'error')))
+      .catch(() => toast('Could not open the image', 'error'))
 }
 
 function SubagentCard({ item }: { item: Extract<ThreadItem, { type: 'subagent' }> }) {
@@ -362,7 +454,7 @@ function ImageFromPath({ path, cwd }: { path: string; cwd: string }) {
     const full = /^([a-zA-Z]:[\\/]|\/)/.test(path) ? path : `${cwd}/${path}`
     void window.odex.fs.read(full).then((r: any) => r.kind === 'media' && setSrc(r.dataUrl)).catch(() => {})
   }, [path, cwd])
-  return src ? <img src={src} alt={path} style={{ maxWidth: 320, maxHeight: 220, borderRadius: 6, border: '1px solid var(--border)' }} /> : null
+  return src ? <img className="viewed-image zoomable" src={src} alt={path} title="View image" onClick={() => A.openImage(src, basename(path))} /> : null
 }
 
 export const ItemView = memo(function ItemView({ item, turn, threadId }: { item: ThreadItem; turn: Turn; threadId: string }) {
@@ -485,8 +577,8 @@ export const ItemView = memo(function ItemView({ item, turn, threadId }: { item:
           <Collapsible icon={<Monitor size={13} />} title={`${item.action}${item.app ? ` · ${item.app}` : ''}`} right={<Status status={item.status} />} defaultOpen={!!(item.beforeImage || item.afterImage)}>
             {(item.beforeImage || item.afterImage) && (
               <div className="thumbs">
-                {item.beforeImage && <img src={item.beforeImage} alt="before" title="before" />}
-                {item.afterImage && <img src={item.afterImage} alt="after" title="after" />}
+                {item.beforeImage && <img className="zoomable" src={item.beforeImage} alt="before" title="before" onClick={() => A.openImage(item.beforeImage!, `${item.action} before`)} />}
+                {item.afterImage && <img className="zoomable" src={item.afterImage} alt="after" title="after" onClick={() => A.openImage(item.afterImage!, `${item.action} after`)} />}
               </div>
             )}
             {item.output && <div className="cell-body"><pre>{item.output}</pre></div>}
@@ -499,7 +591,7 @@ export const ItemView = memo(function ItemView({ item, turn, threadId }: { item:
           <Collapsible icon={<Globe size={13} />} title={`${item.action}${item.url ? ` · ${item.url}` : ''}`} right={<Status status={item.status} />}>
             {item.image && (
               <div className="thumbs">
-                <img src={item.image} alt="page" />
+                <img className="zoomable" src={item.image} alt="page" title="View screenshot" onClick={() => A.openImage(item.image!, item.url ? `page ${item.url}` : 'page')} />
               </div>
             )}
             {item.output && <div className="cell-body"><pre>{item.output}</pre></div>}

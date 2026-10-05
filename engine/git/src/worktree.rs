@@ -12,6 +12,17 @@ use crate::Git;
 /// Ignored agent instructions copied into new worktrees even without `.worktreeinclude`.
 const AGENTS_OVERRIDE: &str = "AGENTS.override.md";
 
+/// Result of [`Git::worktree_move_changes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovedChanges {
+    /// Changed paths carried into the worktree.
+    pub files: usize,
+    /// Stash message holding the local copy (when the local checkout was cleaned).
+    pub stash: Option<String>,
+    /// Why the local checkout could not be cleaned (the changes are then in both places).
+    pub stash_error: Option<String>,
+}
+
 fn check_name(kind: &str, value: &str) -> Result<()> {
     if value.is_empty() || value.starts_with('-') {
         Err(GitError::Invalid(format!("invalid {kind} {value:?}")))
@@ -60,6 +71,48 @@ impl Git {
             let _ = self.cmd_at(&root).args(["update-ref", "-d", name.as_str()]).output().await;
         }
         result
+    }
+
+    /// Move this checkout's uncommitted changes (staged, unstaged and untracked) into a new
+    /// worktree on `new_branch` at `HEAD`. Unless `keep_local`, the changes are then stashed in
+    /// this checkout (`git stash push -u`), so it ends clean and nothing is lost: the stash
+    /// keeps a copy. A failed stash leaves the changes in both places (`stash_error`).
+    pub async fn worktree_move_changes(&self, path: &Path, new_branch: &str, keep_local: bool) -> Result<MovedChanges> {
+        let root = self.repo_root().await?;
+        let files = self.status().await?.files.len();
+        self.worktree_add_with_changes(path, new_branch).await?;
+        let mut moved = MovedChanges { files, stash: None, stash_error: None };
+        if files > 0 && !keep_local {
+            let message = format!("odex: moved to {new_branch}");
+            let out = self
+                .cmd_at(&root)
+                .args(["stash", "push", "--include-untracked", "-m", message.as_str()])
+                .output()
+                .await?;
+            if out.success() {
+                moved.stash = Some(message);
+            } else {
+                moved.stash_error = Some(
+                    crate::cmd::command_error("git", "stash push --include-untracked".into(), &root, &out).to_string(),
+                );
+            }
+        }
+        Ok(moved)
+    }
+
+    /// Whether the local branch `refs/heads/<name>` exists.
+    pub async fn branch_exists(&self, name: &str) -> Result<bool> {
+        let root = self.repo_root().await?;
+        Ok(self.rev_parse_opt(&root, &format!("refs/heads/{name}")).await?.is_some())
+    }
+
+    /// Re-create a removed worktree at `path` for the existing `branch` (`git worktree add`).
+    pub async fn worktree_add_existing(&self, path: &Path, branch: &str) -> Result<()> {
+        check_name("branch", branch)?;
+        let root = self.repo_root().await?;
+        let _ = self.cmd_at(&root).args(["worktree", "prune"]).output().await;
+        self.cmd_at(&root).args(["worktree", "add", "-q"]).arg(path).arg(branch).run().await?;
+        Ok(())
     }
 
     /// `git worktree remove [--force] <path>`.
@@ -378,6 +431,50 @@ mod tests {
         assert_eq!(wt.head_sha().await.unwrap(), git.head_sha().await.unwrap(), "branch starts at HEAD");
         assert_eq!(repo.git(&["status", "--porcelain"]), before, "source checkout untouched");
         assert!(git.list_refs("refs/odex/tmp").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn move_changes_into_worktree_and_stash_local() {
+        let repo = TestRepo::new();
+        let git = Git::new(&repo.path);
+        repo.write("a.txt", "a\n");
+        repo.commit_all("init");
+        repo.write("a.txt", "moved\n");
+        repo.write("new.txt", "n\n");
+
+        let wt_path = repo.sibling("wt-move");
+        let moved = git.worktree_move_changes(&wt_path, "odex/move", false).await.unwrap();
+        assert_eq!(moved.files, 2);
+        assert_eq!(moved.stash.as_deref(), Some("odex: moved to odex/move"));
+        assert!(moved.stash_error.is_none());
+        assert_eq!(std::fs::read_to_string(wt_path.join("a.txt")).unwrap(), "moved\n");
+        assert!(wt_path.join("new.txt").exists());
+        assert_eq!(repo.git(&["status", "--porcelain"]).trim(), "", "local checkout is clean");
+        assert!(repo.git(&["stash", "list"]).contains("odex: moved to odex/move"));
+
+        // keep_local copies instead
+        repo.write("a.txt", "copied\n");
+        let wt2 = repo.sibling("wt-copy");
+        let moved = git.worktree_move_changes(&wt2, "odex/copy", true).await.unwrap();
+        assert_eq!(moved.files, 1);
+        assert!(moved.stash.is_none());
+        assert_eq!(std::fs::read_to_string(wt2.join("a.txt")).unwrap(), "copied\n");
+        assert_eq!(std::fs::read_to_string(repo.path.join("a.txt")).unwrap(), "copied\n");
+    }
+
+    #[tokio::test]
+    async fn re_add_removed_worktree_for_existing_branch() {
+        let repo = TestRepo::new();
+        let git = Git::new(&repo.path);
+        repo.write("a.txt", "a\n");
+        repo.commit_all("init");
+        let wt_path = repo.sibling("wt-again");
+        git.worktree_add(&wt_path, "odex/again", "main").await.unwrap();
+        git.worktree_remove(&wt_path, true).await.unwrap();
+        assert!(!wt_path.exists());
+        git.worktree_add_existing(&wt_path, "odex/again").await.unwrap();
+        assert!(wt_path.join("a.txt").exists());
+        assert_eq!(Git::new(&wt_path).current_branch().await.unwrap().as_deref(), Some("odex/again"));
     }
 
     #[tokio::test]

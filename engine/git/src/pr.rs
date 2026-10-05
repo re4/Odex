@@ -1,11 +1,15 @@
 //! GitHub pull requests: through the `gh` CLI when it is installed, otherwise the REST API with
-//! a token (explicit, or `GITHUB_TOKEN` / `GH_TOKEN`). The repository is derived from the
-//! `origin` remote (https, ssh and scp-like forms; GitHub Enterprise hosts use `/api/v3`).
+//! a token (the desktop's stored `github:token` secret, else `GITHUB_TOKEN` / `GH_TOKEN`). The
+//! repository is derived from the `origin` remote (https, ssh and scp-like forms; GitHub
+//! Enterprise hosts use `/api/v3`).
+//!
+//! `ODEX_GITHUB_API` overrides the REST base URL and always selects the REST path, so tests (and
+//! proxies) can point the engine at another server.
 
 use std::path::Path;
 use std::time::Duration;
 
-use odex_protocol::{PrCheck, PrReviewComment, PrTimelineEvent, PullRequest, ReviewComment};
+use odex_protocol::{PrCheck, PrListItem, PrReviewComment, PrTimelineEvent, PullRequest, ReviewComment};
 use serde_json::{json, Value};
 
 use crate::cmd::GitCommand;
@@ -14,6 +18,62 @@ use crate::error::{GitError, Result};
 use crate::Git;
 
 const USER_AGENT: &str = concat!("odex-git/", env!("CARGO_PKG_VERSION"));
+
+/// Characters of check log returned by [`check_log`].
+pub const CHECK_LOG_CAP: usize = 12_000;
+
+/// How to reach GitHub. Never print it: it holds the token.
+#[derive(Clone, Default)]
+pub struct GithubConfig {
+    /// API token (explicit secret first, then the environment).
+    pub token: Option<String>,
+    /// REST base URL override; when set, `gh` is not used.
+    pub api_base: Option<String>,
+}
+
+impl std::fmt::Debug for GithubConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GithubConfig")
+            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("api_base", &self.api_base)
+            .finish()
+    }
+}
+
+impl GithubConfig {
+    /// `explicit_token` (the desktop secret) wins over `GITHUB_TOKEN` / `GH_TOKEN`;
+    /// `ODEX_GITHUB_API` sets the REST base.
+    pub fn resolve(explicit_token: Option<&str>) -> Self {
+        let api_base = std::env::var("ODEX_GITHUB_API")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty());
+        GithubConfig { token: resolve_token(explicit_token), api_base }
+    }
+
+    /// REST API only, against `base` (tests).
+    pub fn rest(base: &str, token: Option<&str>) -> Self {
+        GithubConfig { token: token.map(str::to_string), api_base: Some(base.trim_end_matches('/').to_string()) }
+    }
+
+    async fn use_gh(&self) -> bool {
+        self.api_base.is_none() && gh_available().await
+    }
+
+    /// A `gh` command that authenticates with our token when we have one.
+    fn gh(&self, cwd: &Path) -> GitCommand {
+        let cmd = GitCommand::gh(cwd);
+        match &self.token {
+            Some(t) => cmd.env("GH_TOKEN", t),
+            None => cmd,
+        }
+    }
+
+    fn api(&self, repo: GithubRepo) -> Result<Api> {
+        let base = self.api_base.clone().unwrap_or_else(|| repo.api_base());
+        Api::new(repo, base, self.token.clone())
+    }
+}
 
 /// A GitHub repository identified from a remote URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +173,100 @@ fn number_from_url(url: &str) -> Option<u32> {
     url[idx + 6..].split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
 }
 
+/// The Actions job / check-run id in a check URL:
+/// `…/actions/runs/<run>/job/<id>` or `…/runs/<id>` (a check-run page).
+pub fn job_id_from_url(url: &str) -> Option<String> {
+    let digits = |rest: &str| -> Option<String> {
+        let d: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        (!d.is_empty()).then_some(d)
+    };
+    if let Some(i) = url.rfind("/job/") {
+        return digits(&url[i + 5..]);
+    }
+    let i = url.rfind("/runs/")?;
+    if url[..i].ends_with("/actions") {
+        return None; // a workflow run, not a single job
+    }
+    digits(&url[i + 6..])
+}
+
+/// `comment` / `approve` / `requestChanges` (any case, `_` or `-` separated) → the REST event.
+pub fn normalize_event(event: &str) -> Option<&'static str> {
+    let e: String = event.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_uppercase();
+    match e.as_str() {
+        "" | "COMMENT" => Some("COMMENT"),
+        "APPROVE" => Some("APPROVE"),
+        "REQUESTCHANGES" => Some("REQUEST_CHANGES"),
+        _ => None,
+    }
+}
+
+/// Combined check state (`failure` > `pending` > `success`; none without checks) and the
+/// number of failed checks.
+pub fn summarize_checks(checks: &[PrCheck]) -> (Option<String>, u32) {
+    let failed = checks.iter().filter(|c| c.state == "failure").count() as u32;
+    let state = if failed > 0 {
+        Some("failure")
+    } else if checks.iter().any(|c| c.state == "pending") {
+        Some("pending")
+    } else if checks.iter().any(|c| c.state == "success") {
+        Some("success")
+    } else {
+        None
+    };
+    (state.map(str::to_string), failed)
+}
+
+/// Drop the `2024-05-01T10:00:00.1234567Z ` prefix GitHub Actions puts on log lines.
+fn strip_timestamp(line: &str) -> &str {
+    let b = line.as_bytes();
+    if b.len() > 20 && b[..4].iter().all(u8::is_ascii_digit) && b[4] == b'-' && b[10] == b'T' {
+        if let Some(i) = b[..b.len().min(40)].windows(2).position(|w| w == b"Z ") {
+            return line.get(i + 2..).unwrap_or(line);
+        }
+    }
+    line
+}
+
+/// Keep what helps fix a failure within `cap` characters: `##[error]` lines from anywhere, then
+/// the tail of the log (failures are reported last). Returns the text and whether it was cut.
+pub fn tail_log(raw: &str, cap: usize) -> (String, bool) {
+    let lines: Vec<&str> = raw.lines().map(strip_timestamp).filter(|l| !l.trim().is_empty()).collect();
+    let total: usize = lines.iter().map(|l| l.len() + 1).sum();
+    if total <= cap {
+        return (lines.join("\n"), false);
+    }
+    let mut tail: Vec<&str> = Vec::new();
+    let mut used = 0;
+    let budget = cap * 3 / 4;
+    for l in lines.iter().rev() {
+        if used + l.len() + 1 > budget {
+            break;
+        }
+        used += l.len() + 1;
+        tail.push(l);
+    }
+    tail.reverse();
+    let cut = lines.len() - tail.len();
+    let mut errors: Vec<&str> = Vec::new();
+    let mut err_used = 0;
+    for l in &lines[..cut] {
+        if l.contains("##[error]") && !errors.contains(l) && err_used + l.len() < cap - budget {
+            err_used += l.len() + 1;
+            errors.push(l);
+        }
+    }
+    let mut out = String::new();
+    if !errors.is_empty() {
+        out.push_str("Errors reported earlier in the log:\n");
+        out.push_str(&errors.join("\n"));
+        out.push_str("\n\n");
+    }
+    out.push_str(&format!("… ({cut} earlier lines omitted)\n"));
+    out.push_str(&tail.join("\n"));
+    (out, true)
+}
+
 /// Map a check-run status/conclusion or a commit status state to
 /// `pending | success | failure | neutral | skipped`.
 pub fn check_state(status: Option<&str>, conclusion: Option<&str>) -> &'static str {
@@ -142,10 +296,7 @@ pub fn check_state(status: Option<&str>, conclusion: Option<&str>) -> &'static s
 /// `end_line` turns into a multi-line range). Comments without a line are folded into the
 /// review body, since the reviews API only accepts line comments.
 pub fn review_payload(comments: &[ReviewComment], body: Option<&str>, event: &str) -> Result<Value> {
-    let event = event.trim().to_ascii_uppercase();
-    if !matches!(event.as_str(), "COMMENT" | "APPROVE" | "REQUEST_CHANGES") {
-        return Err(GitError::Invalid(format!("invalid review event {event:?}")));
-    }
+    let event = normalize_event(event).ok_or_else(|| GitError::Invalid(format!("invalid review event {event:?}")))?;
     let mut text = body.unwrap_or_default().trim().to_string();
     let mut inline = Vec::new();
     for c in comments {
@@ -262,6 +413,7 @@ pub fn pr_from_rest(
             name: s(&run["name"]),
             state: check_state(run["status"].as_str(), run["conclusion"].as_str()).into(),
             url: opt_s(&run["details_url"]).or_else(|| opt_s(&run["html_url"])),
+            id: run["id"].as_u64().map(|n| n.to_string()),
         });
     }
     for st in statuses["statuses"].as_array().into_iter().flatten() {
@@ -269,6 +421,7 @@ pub fn pr_from_rest(
             name: s(&st["context"]),
             state: check_state(st["state"].as_str(), None).into(),
             url: opt_s(&st["target_url"]),
+            id: None,
         });
     }
 
@@ -378,12 +531,15 @@ pub fn pr_from_gh(view: &Value, diff: &str, review_comments: &Value) -> PullRequ
                     name: s(&c["context"]),
                     state: check_state(c["state"].as_str(), None).into(),
                     url: opt_s(&c["targetUrl"]),
+                    id: None,
                 }
             } else {
+                let url = opt_s(&c["detailsUrl"]);
                 PrCheck {
                     name: s(&c["name"]),
                     state: check_state(c["status"].as_str(), c["conclusion"].as_str().filter(|s| !s.is_empty())).into(),
-                    url: opt_s(&c["detailsUrl"]),
+                    id: url.as_deref().and_then(job_id_from_url),
+                    url,
                 }
             }
         })
@@ -415,13 +571,13 @@ struct Api {
 }
 
 impl Api {
-    fn new(repo: GithubRepo, token: Option<String>) -> Result<Self> {
+    fn new(repo: GithubRepo, base: String, token: Option<String>) -> Result<Self> {
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(|e| GitError::Network(e.to_string()))?;
-        Ok(Api { client, base: repo.api_base(), repo, token })
+        Ok(Api { client, base, repo, token })
     }
 
     fn require_token(&self) -> Result<()> {
@@ -429,7 +585,8 @@ impl Api {
             Ok(())
         } else {
             Err(GitError::Invalid(
-                "a GitHub token is required (set GITHUB_TOKEN or GH_TOKEN, or install the gh CLI)".into(),
+                "a GitHub token is required (add one in Settings → Git, set GITHUB_TOKEN or GH_TOKEN, or install the gh CLI)"
+                    .into(),
             ))
         }
     }
@@ -451,9 +608,10 @@ impl Api {
     }
 
     async fn send(req: reqwest::RequestBuilder) -> Result<String> {
-        let resp = req.send().await.map_err(|e| GitError::Network(e.to_string()))?;
+        // `without_url`: errors must not echo request details.
+        let resp = req.send().await.map_err(|e| GitError::Network(e.without_url().to_string()))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| GitError::Network(e.to_string()))?;
+        let text = resp.text().await.map_err(|e| GitError::Network(e.without_url().to_string()))?;
         if status.is_success() {
             Ok(text)
         } else {
@@ -463,14 +621,14 @@ impl Api {
                     let mut msg = v["message"].as_str()?.to_string();
                     if let Some(errors) = v["errors"].as_array() {
                         for e in errors {
-                            if let Some(m) = e["message"].as_str() {
+                            if let Some(m) = e["message"].as_str().or_else(|| e.as_str()) {
                                 msg.push_str(&format!("; {m}"));
                             }
                         }
                     }
                     Some(msg)
                 })
-                .unwrap_or(text);
+                .unwrap_or_else(|| text.chars().take(300).collect());
             Err(GitError::Http { status: status.as_u16(), message })
         }
     }
@@ -495,10 +653,16 @@ impl Api {
             .await
             .unwrap_or_default()
     }
+
+    /// Plain-text job log (GitHub redirects to a short-lived download URL).
+    async fn job_log(&self, job_id: &str) -> Result<String> {
+        let path = format!("/actions/jobs/{job_id}/logs");
+        Self::send(self.request(reqwest::Method::GET, &path, "application/vnd.github+json")).await
+    }
 }
 
-async fn gh_json(cwd: &Path, args: &[&str]) -> Result<Value> {
-    let out = GitCommand::gh(cwd).args(args).run().await?;
+async fn gh_json(gh: GitCommand, args: &[&str]) -> Result<Value> {
+    let out = gh.args(args).run().await?;
     serde_json::from_slice(&out.stdout).map_err(|e| GitError::Parse(format!("gh output: {e}")))
 }
 
@@ -510,9 +674,9 @@ pub async fn create(
     body: &str,
     base: Option<&str>,
     draft: bool,
-    token: Option<&str>,
+    cfg: &GithubConfig,
 ) -> Result<(String, Option<u32>)> {
-    if gh_available().await {
+    if cfg.use_gh().await {
         let mut args = vec!["pr", "create", "--title", title, "--body-file", "-"];
         if let Some(b) = base {
             args.extend(["--base", b]);
@@ -520,7 +684,7 @@ pub async fn create(
         if draft {
             args.push("--draft");
         }
-        let out = GitCommand::gh(cwd).args(&args).stdin(body.as_bytes().to_vec()).run().await?;
+        let out = cfg.gh(cwd).args(&args).stdin(body.as_bytes().to_vec()).run().await?;
         let url = out.stdout_str().lines().rev().find(|l| l.contains("/pull/")).unwrap_or_default().trim().to_string();
         let number = number_from_url(&url);
         return Ok((url, number));
@@ -531,7 +695,7 @@ pub async fn create(
         .current_branch()
         .await?
         .ok_or_else(|| GitError::Invalid("detached HEAD: no branch to open a PR from".into()))?;
-    let api = Api::new(repo, resolve_token(token))?;
+    let api = cfg.api(repo)?;
     api.require_token()?;
     let base = match base {
         Some(b) => b.to_string(),
@@ -548,8 +712,8 @@ pub async fn create(
 
 /// Fetch a pull request with checks, timeline, review comments and parsed file diffs.
 /// `number: None` looks up the PR for the current branch; `Ok(None)` when there is none.
-pub async fn view(cwd: &Path, number: Option<u32>, token: Option<&str>) -> Result<Option<PullRequest>> {
-    if gh_available().await {
+pub async fn view(cwd: &Path, number: Option<u32>, cfg: &GithubConfig) -> Result<Option<PullRequest>> {
+    if cfg.use_gh().await {
         const FIELDS: &str = "number,title,body,state,url,author,headRefName,baseRefName,additions,deletions,isDraft,\
 statusCheckRollup,comments,reviews,commits,createdAt,mergedAt,closedAt,mergedBy";
         let num = number.map(|n| n.to_string());
@@ -558,7 +722,7 @@ statusCheckRollup,comments,reviews,commits,createdAt,mergedAt,closedAt,mergedBy"
             args.push(n);
         }
         args.extend(["--json", FIELDS]);
-        let out = GitCommand::gh(cwd).args(&args).output().await?;
+        let out = cfg.gh(cwd).args(&args).output().await?;
         if !out.success() {
             let err = out.stderr_str();
             if err.contains("no pull requests found") || err.contains("Could not resolve to a PullRequest") {
@@ -568,19 +732,20 @@ statusCheckRollup,comments,reviews,commits,createdAt,mergedAt,closedAt,mergedBy"
         }
         let view: Value = serde_json::from_slice(&out.stdout).map_err(|e| GitError::Parse(e.to_string()))?;
         let n = view["number"].as_u64().unwrap_or(0).to_string();
-        let diff = GitCommand::gh(cwd)
+        let diff = cfg
+            .gh(cwd)
             .args(["pr", "diff", n.as_str(), "--color=never"])
             .run()
             .await
             .map(|o| o.stdout_str())
             .unwrap_or_default();
         let comments_path = format!("repos/{{owner}}/{{repo}}/pulls/{n}/comments?per_page=100");
-        let comments = gh_json(cwd, &["api", comments_path.as_str()]).await.unwrap_or(Value::Null);
+        let comments = gh_json(cfg.gh(cwd), &["api", comments_path.as_str()]).await.unwrap_or(Value::Null);
         return Ok(Some(pr_from_gh(&view, &diff, &comments)));
     }
 
     let repo = origin_repo(cwd).await?;
-    let api = Api::new(repo.clone(), resolve_token(token))?;
+    let api = cfg.api(repo.clone())?;
     let number = match number {
         Some(n) => n,
         None => {
@@ -610,34 +775,54 @@ statusCheckRollup,comments,reviews,commits,createdAt,mergedAt,closedAt,mergedBy"
     Ok(Some(pr_from_rest(&pr, &diff, &issue_comments, &reviews, &review_comments, &commits, &runs, &statuses)))
 }
 
-/// Open pull requests: `(number, title, state)`.
-pub async fn list(cwd: &Path, token: Option<&str>) -> Result<Vec<(u32, String, String)>> {
-    if gh_available().await {
-        let v = gh_json(cwd, &["pr", "list", "--json", "number,title,state,isDraft", "--limit", "100"]).await?;
-        return Ok(v
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|p| {
-                let state = if p["isDraft"].as_bool().unwrap_or(false) {
-                    "draft".to_string()
-                } else {
-                    s(&p["state"]).to_lowercase()
-                };
-                (p["number"].as_u64().unwrap_or(0) as u32, s(&p["title"]), state)
-            })
-            .collect());
+fn list_item_from_rest(p: &Value) -> PrListItem {
+    let state = if p["merged_at"].is_string() {
+        "merged".to_string()
+    } else if p["draft"].as_bool().unwrap_or(false) {
+        "draft".to_string()
+    } else {
+        s(&p["state"]).to_lowercase()
+    };
+    PrListItem {
+        number: p["number"].as_u64().unwrap_or(0) as u32,
+        title: s(&p["title"]),
+        state,
+        author: s(&p["user"]["login"]),
+        head: s(&p["head"]["ref"]),
+        base: s(&p["base"]["ref"]),
+        url: s(&p["html_url"]),
+        updated_at: millis(&p["updated_at"]),
     }
-    let api = Api::new(origin_repo(cwd).await?, resolve_token(token))?;
-    let v = api.get("/pulls?state=open&per_page=100").await?;
-    Ok(v.as_array()
-        .into_iter()
-        .flatten()
-        .map(|p| {
-            let state = if p["draft"].as_bool().unwrap_or(false) { "draft".to_string() } else { s(&p["state"]) };
-            (p["number"].as_u64().unwrap_or(0) as u32, s(&p["title"]), state)
-        })
-        .collect())
+}
+
+fn list_item_from_gh(p: &Value) -> PrListItem {
+    let state =
+        if p["isDraft"].as_bool().unwrap_or(false) { "draft".to_string() } else { s(&p["state"]).to_lowercase() };
+    PrListItem {
+        number: p["number"].as_u64().unwrap_or(0) as u32,
+        title: s(&p["title"]),
+        state,
+        author: s(&p["author"]["login"]),
+        head: s(&p["headRefName"]),
+        base: s(&p["baseRefName"]),
+        url: s(&p["url"]),
+        updated_at: millis(&p["updatedAt"]),
+    }
+}
+
+/// Open pull requests of the `origin` repository, most recently updated first.
+pub async fn list(cwd: &Path, cfg: &GithubConfig) -> Result<Vec<PrListItem>> {
+    const GH_FIELDS: &str = "number,title,state,isDraft,author,headRefName,baseRefName,url,updatedAt";
+    let mut items: Vec<PrListItem> = if cfg.use_gh().await {
+        let v = gh_json(cfg.gh(cwd), &["pr", "list", "--json", GH_FIELDS, "--limit", "50"]).await?;
+        v.as_array().into_iter().flatten().map(list_item_from_gh).collect()
+    } else {
+        let api = cfg.api(origin_repo(cwd).await?)?;
+        let v = api.get("/pulls?state=open&sort=updated&direction=desc&per_page=50").await?;
+        v.as_array().into_iter().flatten().map(list_item_from_rest).collect()
+    };
+    items.sort_by_key(|p| std::cmp::Reverse(p.updated_at));
+    Ok(items)
 }
 
 /// Submit a review (`COMMENT`, `APPROVE` or `REQUEST_CHANGES`) with inline comments.
@@ -648,12 +833,13 @@ pub async fn submit_review(
     comments: &[ReviewComment],
     body: Option<&str>,
     event: &str,
-    token: Option<&str>,
+    cfg: &GithubConfig,
 ) -> Result<String> {
     let payload = review_payload(comments, body, event)?;
-    if gh_available().await {
+    if cfg.use_gh().await {
         let path = format!("repos/{{owner}}/{{repo}}/pulls/{number}/reviews");
-        let out = GitCommand::gh(cwd)
+        let out = cfg
+            .gh(cwd)
             .args(["api", "--method", "POST", path.as_str(), "--input", "-"])
             .stdin(serde_json::to_vec(&payload).map_err(|e| GitError::Parse(e.to_string()))?)
             .run()
@@ -661,10 +847,71 @@ pub async fn submit_review(
         let v: Value = serde_json::from_slice(&out.stdout).map_err(|e| GitError::Parse(e.to_string()))?;
         return Ok(opt_s(&v["html_url"]).unwrap_or_else(|| v["id"].to_string()));
     }
-    let api = Api::new(origin_repo(cwd).await?, resolve_token(token))?;
+    let api = cfg.api(origin_repo(cwd).await?)?;
     api.require_token()?;
     let v = api.post(&format!("/pulls/{number}/reviews"), &payload).await?;
     Ok(opt_s(&v["html_url"]).unwrap_or_else(|| v["id"].to_string()))
+}
+
+/// Text of a check run's `output` (title, summary, details).
+fn check_output_text(run: &Value) -> String {
+    let out = &run["output"];
+    [opt_s(&out["title"]), opt_s(&out["summary"]), opt_s(&out["text"])]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// The output and failed log of one check, capped at [`CHECK_LOG_CAP`] characters.
+/// `check_id` is the check-run (Actions job) id; an Actions job `url` may stand in for it.
+/// Returns the text and whether the log was cut.
+pub async fn check_log(
+    cwd: &Path,
+    check_id: Option<&str>,
+    url: Option<&str>,
+    cfg: &GithubConfig,
+) -> Result<(String, bool)> {
+    let id = check_id
+        .map(str::to_string)
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+        .or_else(|| url.and_then(job_id_from_url))
+        .ok_or_else(|| GitError::Invalid("this check has no log Odex can fetch (not a GitHub check run)".into()))?;
+    let (summary, log) = if cfg.use_gh().await {
+        let path = format!("repos/{{owner}}/{{repo}}/check-runs/{id}");
+        let summary =
+            gh_json(cfg.gh(cwd), &["api", path.as_str()]).await.map(|v| check_output_text(&v)).unwrap_or_default();
+        let job = ["run", "view", "--job", id.as_str()];
+        let mut log = cfg.gh(cwd).args(job).arg("--log-failed").run().await.map(|o| o.stdout_str());
+        if log.as_ref().map_or(true, |l| l.trim().is_empty()) {
+            log = cfg.gh(cwd).args(job).arg("--log").run().await.map(|o| o.stdout_str());
+        }
+        (summary, log)
+    } else {
+        let api = cfg.api(origin_repo(cwd).await?)?;
+        let run_path = format!("/check-runs/{id}");
+        let (run, log) = tokio::join!(api.get(&run_path), api.job_log(&id));
+        (run.map(|v| check_output_text(&v)).unwrap_or_default(), log)
+    };
+    let summary = summary.trim();
+    let summary_cut = summary.chars().count() > CHECK_LOG_CAP / 3;
+    let summary: String = if summary_cut {
+        summary.chars().take(CHECK_LOG_CAP / 3).chain("…".chars()).collect()
+    } else {
+        summary.to_string()
+    };
+    let (log_text, log_cut) = match &log {
+        Ok(l) if !l.trim().is_empty() => tail_log(l, CHECK_LOG_CAP - summary.len()),
+        _ => (String::new(), false),
+    };
+    if summary.is_empty() && log_text.is_empty() {
+        return Err(match log {
+            Err(e) => e,
+            Ok(_) => GitError::Invalid("the check has no output or log".into()),
+        });
+    }
+    let text = [summary, log_text].into_iter().filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n");
+    Ok((text, summary_cut || log_cut))
 }
 
 #[cfg(test)]
@@ -860,11 +1107,260 @@ mod tests {
         repo.git(&["remote", "add", "origin", "git@github.com:odex-app/odex.git"]);
         let r = origin_repo(&repo.path).await.unwrap();
         assert_eq!(r.slug(), "odex-app/odex");
-        let api = Api::new(r, Some("t".into())).unwrap();
+        let cfg = GithubConfig { token: Some("t".into()), api_base: None };
+        let api = cfg.api(r).unwrap();
         assert_eq!(api.url("/pulls/1"), "https://api.github.com/repos/odex-app/odex/pulls/1");
-        assert!(Api::new(GithubRepo { host: "github.com".into(), owner: "o".into(), repo: "r".into() }, None)
-            .unwrap()
-            .require_token()
-            .is_err());
+        let o = GithubRepo { host: "github.com".into(), owner: "o".into(), repo: "r".into() };
+        assert!(GithubConfig::default().api(o.clone()).unwrap().require_token().is_err());
+        let fake = GithubConfig::rest("http://127.0.0.1:9/", None);
+        assert_eq!(fake.api(o).unwrap().url("/pulls"), "http://127.0.0.1:9/repos/o/r/pulls");
+        assert!(!format!("{:?}", GithubConfig::rest("x", Some("s3cret"))).contains("s3cret"));
+    }
+
+    #[test]
+    fn helpers() {
+        assert_eq!(job_id_from_url("https://github.com/o/r/actions/runs/11/job/22").as_deref(), Some("22"));
+        assert_eq!(job_id_from_url("https://github.com/o/r/runs/33?check_suite_focus=true").as_deref(), Some("33"));
+        assert_eq!(job_id_from_url("https://github.com/o/r/actions/runs/11"), None);
+        assert_eq!(job_id_from_url("https://ci.example/build/5"), None);
+        assert_eq!(normalize_event("requestChanges"), Some("REQUEST_CHANGES"));
+        assert_eq!(normalize_event("request-changes"), Some("REQUEST_CHANGES"));
+        assert_eq!(normalize_event("Approve"), Some("APPROVE"));
+        assert_eq!(normalize_event(""), Some("COMMENT"));
+        assert_eq!(normalize_event("merge"), None);
+        let check = |state: &str| PrCheck { name: "c".into(), state: state.into(), url: None, id: None };
+        assert_eq!(summarize_checks(&[]), (None, 0));
+        assert_eq!(summarize_checks(&[check("success"), check("pending")]), (Some("pending".into()), 0));
+        assert_eq!(
+            summarize_checks(&[check("failure"), check("failure"), check("success")]),
+            (Some("failure".into()), 2)
+        );
+        assert_eq!(summarize_checks(&[check("success"), check("skipped")]), (Some("success".into()), 0));
+
+        let (short, cut) = tail_log("2024-05-01T10:00:00.1234567Z hello\n\nworld\n", 100);
+        assert_eq!((short.as_str(), cut), ("hello\nworld", false));
+        let mut long = String::from("2024-05-01T10:00:00.0000000Z ##[error]early failure\n");
+        for i in 0..2000 {
+            long.push_str(&format!("2024-05-01T10:00:01.0000000Z line {i}\n"));
+        }
+        long.push_str("2024-05-01T10:00:02.0000000Z ##[error]Process completed with exit code 1.\n");
+        let (t, cut) = tail_log(&long, 1000);
+        assert!(cut);
+        assert!(t.chars().count() <= 1100, "{}", t.len());
+        assert!(t.contains("##[error]early failure"));
+        assert!(t.ends_with("##[error]Process completed with exit code 1."));
+        assert!(!t.contains("2024-05-01T"));
+    }
+
+    /// A tiny fake of the GitHub REST API: records requests, answers the PR endpoints.
+    mod fake {
+        use std::sync::{Arc, Mutex};
+
+        use axum::body::Body;
+        use axum::extract::{Request, State};
+        use axum::http::{header, StatusCode};
+        use axum::response::Response;
+        use axum::Router;
+        use serde_json::{json, Value};
+
+        #[derive(Debug, Clone)]
+        pub struct Hit {
+            pub method: String,
+            pub path: String,
+            pub query: String,
+            pub auth: Option<String>,
+            pub body: Value,
+        }
+
+        #[derive(Clone)]
+        pub struct Fake {
+            pub base: String,
+            pub hits: Arc<Mutex<Vec<Hit>>>,
+        }
+
+        pub const DIFF: &str = "diff --git a/src/app.rs b/src/app.rs\nindex 1..2 100644\n--- a/src/app.rs\n+++ b/src/app.rs\n@@ -1,2 +1,3 @@\n fn main() {\n+    run();\n }\n";
+
+        fn json(v: Value) -> Response {
+            Response::builder()
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(v.to_string()))
+                .unwrap()
+        }
+
+        fn status(code: StatusCode, v: Value) -> Response {
+            let mut r = json(v);
+            *r.status_mut() = code;
+            r
+        }
+
+        pub fn pr_json(n: u64) -> Value {
+            json!({
+                "number": n, "title": "Add run()", "body": "Calls run.", "state": "open", "draft": false, "merged": false,
+                "html_url": format!("https://github.com/o/r/pull/{n}"), "user": {"login": "alice"},
+                "head": {"ref": "feature", "sha": "abc123"}, "base": {"ref": "main"},
+                "additions": 1, "deletions": 0, "created_at": "2024-05-01T10:00:00Z", "updated_at": "2024-05-02T10:00:00Z"
+            })
+        }
+
+        async fn handle(State(f): State<Fake>, req: Request) -> Response {
+            let method = req.method().to_string();
+            let path = req.uri().path().to_string();
+            let query = req.uri().query().unwrap_or("").to_string();
+            let accept = req.headers().get(header::ACCEPT).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+            let auth = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).map(str::to_string);
+            let bytes = axum::body::to_bytes(req.into_body(), usize::MAX).await.unwrap_or_default();
+            let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            f.hits.lock().unwrap().push(Hit {
+                method: method.clone(),
+                path: path.clone(),
+                query: query.clone(),
+                auth,
+                body,
+            });
+            if path == "/blob/55" {
+                let mut log = String::new();
+                for i in 0..3000 {
+                    log.push_str(&format!("2024-05-01T10:00:00.0000000Z step output {i}\n"));
+                }
+                log.push_str("2024-05-01T10:00:01.0000000Z ##[error]test failed: expected 2, got 3\n");
+                return Response::new(Body::from(log));
+            }
+            let Some(rest) = path.strip_prefix("/repos/o/r") else {
+                return status(StatusCode::NOT_FOUND, json!({"message": "Not Found"}));
+            };
+            match (method.as_str(), rest) {
+                ("GET", "/pulls") if query.contains("head=o:feature") => json(json!([pr_json(7)])),
+                ("GET", "/pulls") if query.contains("head=") => json(json!([])),
+                ("GET", "/pulls") => json(json!([
+                    { "number": 3, "title": "Older", "state": "open", "draft": true, "user": {"login": "bob"},
+                      "head": {"ref": "old"}, "base": {"ref": "main"}, "html_url": "https://github.com/o/r/pull/3",
+                      "updated_at": "2024-04-01T00:00:00Z", "merged_at": null },
+                    pr_json(7),
+                ])),
+                ("POST", "/pulls") => json(json!({ "number": 9, "html_url": "https://github.com/o/r/pull/9" })),
+                ("GET", "/pulls/7") if accept.contains("diff") => Response::new(Body::from(DIFF)),
+                ("GET", "/pulls/7") => json(pr_json(7)),
+                ("GET", "/pulls/404") => status(StatusCode::NOT_FOUND, json!({"message": "Not Found"})),
+                ("GET", "/pulls/7/comments") => json(json!([{
+                    "id": 70, "user": {"login": "carol"}, "body": "Why run here?", "path": "src/app.rs", "line": 2,
+                    "side": "RIGHT", "created_at": "2024-05-01T12:00:00Z"
+                }])),
+                ("GET", "/commits/abc123/check-runs") => json(json!({ "check_runs": [
+                    { "id": 55, "name": "test", "status": "completed", "conclusion": "failure",
+                      "details_url": "https://github.com/o/r/actions/runs/5/job/55" },
+                    { "id": 56, "name": "lint", "status": "completed", "conclusion": "success" }
+                ]})),
+                ("GET", "/check-runs/55") => {
+                    json(json!({ "id": 55, "output": { "title": "1 test failed", "summary": "math::add failed" } }))
+                }
+                ("GET", "/actions/jobs/55/logs") => Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header(header::LOCATION, format!("{}/blob/55", f.base))
+                    .body(Body::empty())
+                    .unwrap(),
+                ("POST", "/pulls/7/reviews") => {
+                    json(json!({ "id": 700, "html_url": "https://github.com/o/r/pull/7#pullrequestreview-700" }))
+                }
+                ("GET", p) if p.starts_with("/issues/") || p.starts_with("/pulls/7/") || p.starts_with("/commits/") => {
+                    json(json!([]))
+                }
+                _ => status(StatusCode::NOT_FOUND, json!({"message": "Not Found"})),
+            }
+        }
+
+        pub async fn start() -> Fake {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let fake = Fake { base, hits: Arc::new(Mutex::new(Vec::new())) };
+            let app = Router::new().fallback(handle).with_state(fake.clone());
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            fake
+        }
+    }
+
+    fn github_repo() -> crate::testutil::TestRepo {
+        let repo = crate::testutil::TestRepo::new();
+        repo.write("a.txt", "a\n");
+        repo.commit_all("init");
+        repo.git(&["checkout", "-q", "-b", "feature"]);
+        repo.git(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+        repo
+    }
+
+    #[tokio::test]
+    async fn rest_flows_against_fake_github() {
+        let gh = fake::start().await;
+        let repo = github_repo();
+        let cfg = GithubConfig::rest(&gh.base, Some("t0k"));
+
+        // inbox: most recently updated first, draft state mapped
+        let prs = list(&repo.path, &cfg).await.unwrap();
+        assert_eq!(prs.iter().map(|p| (p.number, p.state.as_str())).collect::<Vec<_>>(), [(7, "open"), (3, "draft")]);
+        assert_eq!((prs[0].author.as_str(), prs[0].head.as_str(), prs[0].base.as_str()), ("alice", "feature", "main"));
+        assert_eq!(prs[0].url, "https://github.com/o/r/pull/7");
+
+        // the PR for the current branch, with files, review comments and check ids
+        let pr = view(&repo.path, None, &cfg).await.unwrap().expect("pr for branch");
+        assert_eq!(pr.number, 7);
+        assert_eq!(pr.files.len(), 1);
+        assert_eq!(pr.files[0].path, "src/app.rs");
+        assert_eq!(pr.files[0].additions, 1);
+        assert_eq!(pr.review_comments.len(), 1);
+        assert_eq!((pr.review_comments[0].path.as_str(), pr.review_comments[0].line), ("src/app.rs", Some(2)));
+        assert_eq!(pr.checks[0].id.as_deref(), Some("55"));
+        assert_eq!(summarize_checks(&pr.checks), (Some("failure".into()), 1));
+        assert!(view(&repo.path, Some(404), &cfg).await.unwrap().is_none());
+
+        // submit a review with an event and inline comments
+        let comments = vec![ReviewComment {
+            path: "src/app.rs".into(),
+            line: Some(2),
+            end_line: None,
+            side: Some("new".into()),
+            body: "Handle the error from run().".into(),
+            snippet: None,
+        }];
+        let url = submit_review(&repo.path, 7, &comments, Some("Needs work"), "requestChanges", &cfg).await.unwrap();
+        assert!(url.ends_with("#pullrequestreview-700"));
+        let hit = gh.hits.lock().unwrap().iter().find(|h| h.method == "POST" && h.path.ends_with("/reviews")).cloned();
+        let hit = hit.expect("review posted");
+        assert_eq!(hit.auth.as_deref(), Some("Bearer t0k"));
+        assert_eq!(hit.body["event"], "REQUEST_CHANGES");
+        assert_eq!(hit.body["body"], "Needs work");
+        assert_eq!(
+            hit.body["comments"],
+            json!([{ "path": "src/app.rs", "body": "Handle the error from run().", "side": "RIGHT", "line": 2 }])
+        );
+
+        // a failing check's output and log tail, capped
+        let (text, truncated) = check_log(&repo.path, Some("55"), None, &cfg).await.unwrap();
+        assert!(truncated);
+        assert!(text.starts_with("1 test failed\n\nmath::add failed"), "{text}");
+        assert!(text.ends_with("##[error]test failed: expected 2, got 3"), "{text}");
+        assert!(text.chars().count() <= CHECK_LOG_CAP + 200);
+        // the job id can come from the details URL
+        let (by_url, _) =
+            check_log(&repo.path, None, Some("https://github.com/o/r/actions/runs/5/job/55"), &cfg).await.unwrap();
+        assert_eq!(by_url, text);
+        assert!(check_log(&repo.path, None, Some("https://ci.example/1"), &cfg).await.is_err());
+
+        // create a PR from the current branch
+        let (url, number) = create(&repo.path, "T", "B", Some("main"), true, &cfg).await.unwrap();
+        assert_eq!((url.as_str(), number), ("https://github.com/o/r/pull/9", Some(9)));
+        let hits = gh.hits.lock().unwrap().clone();
+        let created = hits.iter().find(|h| h.method == "POST" && h.path == "/repos/o/r/pulls").unwrap();
+        assert_eq!(
+            created.body,
+            json!({ "title": "T", "body": "B", "head": "feature", "base": "main", "draft": true })
+        );
+        assert!(hits.iter().filter(|h| h.path.starts_with("/repos/")).all(|h| h.auth.as_deref() == Some("Bearer t0k")));
+        assert!(hits.iter().any(|h| h.path == "/repos/o/r/pulls" && h.query.contains("state=open")));
+
+        // posting needs a token
+        let anon = GithubConfig::rest(&gh.base, None);
+        let err = submit_review(&repo.path, 7, &[], Some("x"), "comment", &anon).await.unwrap_err();
+        assert!(err.to_string().contains("token is required"), "{err}");
     }
 }

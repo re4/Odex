@@ -40,15 +40,38 @@ pub fn slug(s: &str) -> String {
     out.trim_end_matches('-').to_string()
 }
 
+/// `[git] branch_prefix` made safe for a ref name (default `odex/`; empty means no prefix).
+pub fn branch_prefix(configured: Option<&str>) -> String {
+    let Some(raw) = configured else { return "odex/".into() };
+    let mut out = String::new();
+    for c in raw.trim().chars() {
+        let ok = c.is_alphanumeric() || matches!(c, '/' | '-' | '_' | '.');
+        let c = if ok { c } else { '-' };
+        // no `//`, `..` or leading separators
+        if (c == '/' || c == '.') && (out.is_empty() || out.ends_with('/') || out.ends_with('.')) {
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Create a thread (and its worktree in worktree mode). Shared by `thread/start`,
 /// subagents and automations.
 pub async fn start_thread_inner(engine: &Engine, p: ThreadStartParams) -> EResult<Arc<ThreadRt>> {
     let run_mode = p.run_mode.unwrap_or_default();
     let base_branch = p.base_branch.clone();
-    let env_id = p.environment_id.clone();
+    if let Some(pid) = p.project_id.as_deref().filter(|_| p.environment_id.as_deref().is_some_and(|e| !e.is_empty())) {
+        let root = PathBuf::from(engine.project(pid)?.primary_folder());
+        crate::worktrees::validate_environment_id(engine, &root, p.environment_id.as_deref())?;
+    }
     let rt = engine.create_thread(p)?;
     if run_mode == RunMode::Worktree {
-        if let Err(e) = create_worktree(engine, &rt, base_branch.as_deref(), env_id.as_deref()).await {
+        let carry = match base_branch.as_deref() {
+            Some("current-with-changes") => crate::worktrees::Carry::CurrentWithChanges,
+            base => crate::worktrees::Carry::Base(base),
+        };
+        if let Err(e) = crate::worktrees::create_worktree(engine, &rt, carry).await {
             let msg = e.message.clone();
             engine.update_thread(&rt, |t| t.last_error = Some(format!("worktree: {msg}")));
             return Err(e);
@@ -69,81 +92,6 @@ pub async fn start_thread_inner(engine: &Engine, p: ThreadStartParams) -> EResul
     Ok(rt)
 }
 
-async fn create_worktree(engine: &Engine, rt: &ThreadRt, base: Option<&str>, env_id: Option<&str>) -> EResult<()> {
-    let t = rt.thread();
-    let root = engine.thread_root(&t);
-    let g = Git::new(&root);
-    if !g.is_repo().await {
-        return Err(bad(format!("{} is not a git repository; worktree mode needs git", root.display())));
-    }
-    let repo_root = g.repo_root().await.map_err(git_err)?;
-    let s = engine.thread_settings(&t);
-    let project_slug =
-        slug(&repo_root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "project".into()));
-    let short = &t.id[t.id.len().saturating_sub(8)..];
-    let path = s.worktrees_dir.join(&project_slug).join(short);
-    let branch =
-        format!("odex/{}", if let Some(n) = &t.name { format!("{}-{short}", slug(n)) } else { short.to_string() });
-    let current = g.current_branch().await.ok().flatten();
-    let base_branch = base.map(String::from).or(current.clone()).unwrap_or_else(|| "HEAD".into());
-    if base == Some("current-with-changes") {
-        g.worktree_add_with_changes(&path, &branch).await.map_err(git_err)?;
-    } else {
-        g.worktree_add(&path, &branch, &base_branch).await.map_err(git_err)?;
-    }
-    let _ = g.copy_worktree_include(&repo_root, &path).await;
-    let base_commit = Git::new(&path).head_sha().await.ok().flatten();
-    // keep the cwd's relative position inside the repo
-    let rel = PathBuf::from(&t.cwd).strip_prefix(&repo_root).map(|r| r.to_path_buf()).unwrap_or_default();
-    let cwd = path.join(rel);
-    let wt = WorktreeInfo {
-        path: path.to_string_lossy().to_string(),
-        branch: branch.clone(),
-        base_branch: Some(base_branch),
-        base_commit,
-        repo_root: repo_root.to_string_lossy().to_string(),
-        setup_status: None,
-    };
-    engine.update_thread(rt, |t| {
-        t.run_mode = RunMode::Worktree;
-        t.worktree = Some(wt.clone());
-        t.branch = Some(branch.clone());
-        t.cwd = cwd.to_string_lossy().to_string();
-    });
-    // setup script from the project's environment (trusted projects only)
-    if engine.is_trusted(&root) {
-        let envs = load_environments(&root);
-        let env = env_id.and_then(|id| envs.iter().find(|e| e.id == id)).or_else(|| envs.first()).cloned();
-        if let Some(script) = env.and_then(|e| e.setup_script).filter(|s| !s.trim().is_empty()) {
-            engine.update_thread(rt, |t| {
-                if let Some(w) = &mut t.worktree {
-                    w.setup_status = Some("running".into());
-                }
-            });
-            let mut req =
-                odex_sandbox::ExecRequest::new(odex_sandbox::shell_argv(&s.default_shell, &script), path.clone());
-            req.policy = odex_sandbox::SandboxPolicy::FullAccess;
-            req.timeout = Some(std::time::Duration::from_secs(1800));
-            let out = odex_sandbox::exec(req, |_| {}, CancellationToken::new()).await;
-            let status = match out {
-                Ok(o) if o.exit_code == Some(0) => "ok".to_string(),
-                Ok(o) => format!(
-                    "failed (exit {:?}): {}",
-                    o.exit_code,
-                    o.aggregated.chars().rev().take(500).collect::<String>().chars().rev().collect::<String>()
-                ),
-                Err(e) => format!("failed: {e}"),
-            };
-            engine.update_thread(rt, |t| {
-                if let Some(w) = &mut t.worktree {
-                    w.setup_status = Some(status.clone());
-                }
-            });
-        }
-    }
-    Ok(())
-}
-
 pub async fn thread_start(engine: &Engine, p: ThreadStartParams) -> EResult<ThreadResponse> {
     let rt = start_thread_inner(engine, p).await?;
     Ok(ThreadResponse { thread: rt.thread() })
@@ -151,11 +99,14 @@ pub async fn thread_start(engine: &Engine, p: ThreadStartParams) -> EResult<Thre
 
 pub async fn thread_read(engine: &Engine, p: ThreadIdParams) -> EResult<ThreadReadResponse> {
     let rt = engine.thread(&p.thread_id)?;
-    let ctx = {
+    crate::model_watch::check(engine, &rt);
+    let (ctx, summary) = {
         let c = rt.ctx.lock().await;
-        engine.context_status(&rt, &c)
+        (engine.context_status(&rt, &c), engine.summary_card(&c))
     };
-    Ok(engine.read_response(&rt, Some(ctx)))
+    let mut r = engine.read_response(&rt, Some(ctx));
+    r.summary = summary;
+    Ok(r)
 }
 
 pub async fn thread_fork(engine: &Engine, p: ThreadForkParams) -> EResult<ThreadResponse> {
@@ -179,6 +130,12 @@ pub async fn thread_fork(engine: &Engine, p: ThreadForkParams) -> EResult<Thread
         permission_mode: Some(st.permission_mode),
         run_mode: p.run_mode.or(Some(RunMode::Local)),
         parent_thread_id: Some(st.id.clone()),
+        // a fork keeps the source thread's explicit environment (as in effect now: it may be gone)
+        environment_id: match st.environment_id.as_deref() {
+            Some("") => Some(String::new()),
+            Some(_) => crate::worktrees::thread_environment(engine, &st).map(|e| e.id),
+            None => None,
+        },
         ephemeral: p.ephemeral.or(Some(kind == ThreadKind::Side)),
         ..Default::default()
     };
@@ -235,27 +192,39 @@ pub async fn thread_archive(engine: &Engine, p: ThreadArchiveParams) -> EResult<
     let rt = engine.thread(&p.thread_id)?;
     turn::interrupt(&rt);
     engine.sessions.kill_thread(&rt.id).await;
+    crate::worktrees::cancel_setup(&rt.id);
     let t = rt.thread();
     if p.remove_worktree {
-        if let Some(wt) = &t.worktree {
+        if let Some(wt) = t.worktree.as_ref().filter(|w| Path::new(&w.path).is_dir()) {
             let g = Git::new(&wt.repo_root);
-            // snapshot before deleting so the work can be restored
-            let _ =
-                Git::new(&wt.path).snapshot(&format!("refs/odex/archived/{}", t.id), "odex: archived worktree").await;
-            let _ = g.worktree_remove(Path::new(&wt.path), true).await;
+            // snapshot before deleting so the work can be restored (unarchive does)
+            let snap =
+                Git::new(&wt.path).snapshot(&crate::worktrees::archived_ref(&t.id), "odex: archived worktree").await;
+            match snap {
+                Ok(_) => {
+                    let _ = g.worktree_remove(Path::new(&wt.path), true).await;
+                }
+                Err(e) => tracing::warn!("kept worktree {}: snapshot failed: {e}", wt.path),
+            }
         }
     }
     engine.update_thread(&rt, |t| {
         t.archived = true;
         t.status = ThreadStatus::Idle;
     });
+    // retention: old worktrees of archived threads beyond `[worktrees] keep`
+    crate::worktrees::spawn_prune(engine);
     Ok(EmptyResponse {})
 }
 
 pub async fn thread_unarchive(engine: &Engine, p: ThreadIdParams) -> EResult<ThreadResponse> {
     let rt = engine.thread(&p.thread_id)?;
-    let t = engine.update_thread(&rt, |t| t.archived = false);
-    Ok(ThreadResponse { thread: t })
+    engine.update_thread(&rt, |t| t.archived = false);
+    // bring back a worktree that archiving or retention removed
+    if let Some(note) = crate::worktrees::restore_worktree(engine, &rt).await {
+        tracing::warn!("unarchive {}: {note}", rt.id);
+    }
+    Ok(ThreadResponse { thread: rt.thread() })
 }
 
 pub async fn thread_delete(engine: &Engine, p: ThreadIdParams) -> EResult<EmptyResponse> {
@@ -312,6 +281,9 @@ pub async fn thread_update(engine: &Engine, p: ThreadUpdateParams) -> EResult<Th
         }
         if let Some(m) = &p.model {
             t.model = if m.is_empty() { None } else { Some(m.clone()) };
+            // a deliberate switch is not a downgrade
+            t.last_model = None;
+            t.model_warning = None;
         }
         if let Some(e) = p.effort {
             t.effort = Some(e);
@@ -335,6 +307,8 @@ pub async fn thread_update(engine: &Engine, p: ThreadUpdateParams) -> EResult<Th
     if model_changed {
         // re-budget for the new model's window (compacts on next turn if needed)
         engine.emit_context(&rt).await;
+        crate::model_watch::check(engine, &rt);
+        return Ok(ThreadResponse { thread: rt.thread() });
     }
     Ok(ThreadResponse { thread: t })
 }
@@ -412,7 +386,7 @@ pub async fn thread_compact(engine: &Engine, p: ThreadCompactParams) -> EResult<
 pub async fn thread_context(engine: &Engine, p: ThreadIdParams) -> EResult<ContextGetResponse> {
     let rt = engine.thread(&p.thread_id)?;
     let c = rt.ctx.lock().await;
-    Ok(ContextGetResponse { context: engine.context_status(&rt, &c) })
+    Ok(ContextGetResponse { context: engine.context_status(&rt, &c), summary: engine.summary_card(&c) })
 }
 
 pub async fn goal_set(engine: &Engine, p: GoalSetParams) -> EResult<ThreadResponse> {
@@ -420,9 +394,34 @@ pub async fn goal_set(engine: &Engine, p: GoalSetParams) -> EResult<ThreadRespon
     if p.objective.trim().is_empty() {
         return Err(bad("objective is empty"));
     }
+    let existing = rt.thread().goal.filter(|g| g.status != "cleared");
+    if let (Some(mut g), true) = (existing, p.edit.unwrap_or(false)) {
+        // edit in place: keep progress; editing a finished goal reopens it
+        let changed = g.objective != p.objective.trim();
+        g.objective = p.objective.trim().to_string();
+        g.time_budget_secs = p.time_budget_secs;
+        g.token_budget = p.token_budget;
+        if matches!(g.status.as_str(), "done" | "blocked" | "budgetExhausted") {
+            g.status = "active".into();
+        }
+        let active = g.status == "active";
+        let objective = g.objective.clone();
+        let t = engine.update_thread(&rt, |t| t.goal = Some(g));
+        if active && !rt.is_running() {
+            let note = if changed { "The goal was updated" } else { "The goal's budget was updated" };
+            turn::spawn_turn(
+                engine,
+                rt.clone(),
+                vec![UserInput::text(format!("[goal] {note}: {objective}. Continue working toward it."))],
+                TurnOpts { synthetic: true, ..Default::default() },
+            );
+        }
+        return Ok(ThreadResponse { thread: t });
+    }
     let goal = Goal {
-        objective: p.objective.clone(),
+        objective: p.objective.trim().to_string(),
         status: "active".into(),
+        paused_at: None,
         started_at: now_ms(),
         time_budget_secs: p.time_budget_secs,
         token_budget: p.token_budget,
@@ -435,8 +434,54 @@ pub async fn goal_set(engine: &Engine, p: GoalSetParams) -> EResult<ThreadRespon
         turn::spawn_turn(
             engine,
             rt.clone(),
-            vec![UserInput::text(format!("Goal: {}", p.objective))],
+            vec![UserInput::text(format!("Goal: {}", p.objective.trim()))],
             TurnOpts::default(),
+        );
+    }
+    Ok(ThreadResponse { thread: t })
+}
+
+/// Pause an active goal: stop the running turn and stop continuing it.
+pub async fn goal_pause(engine: &Engine, p: ThreadIdParams) -> EResult<ThreadResponse> {
+    let rt = engine.thread(&p.thread_id)?;
+    if rt.thread().goal.as_ref().map(|g| g.status != "active").unwrap_or(true) {
+        return Err(bad("there is no active goal to pause"));
+    }
+    let t = engine.update_thread(&rt, |t| {
+        if let Some(g) = &mut t.goal {
+            g.status = "paused".into();
+            g.paused_at = Some(now_ms());
+        }
+    });
+    turn::interrupt(&rt);
+    Ok(ThreadResponse { thread: t })
+}
+
+/// Resume a paused (or blocked) goal and continue pursuing it.
+pub async fn goal_resume(engine: &Engine, p: ThreadIdParams) -> EResult<ThreadResponse> {
+    let rt = engine.thread(&p.thread_id)?;
+    let Some(g) = rt.thread().goal.filter(|g| g.status == "paused" || g.status == "blocked") else {
+        return Err(bad("there is no paused goal to resume"));
+    };
+    let now = now_ms();
+    let t = engine.update_thread(&rt, |t| {
+        if let Some(g) = &mut t.goal {
+            // paused time does not count against the time budget
+            if let Some(at) = g.paused_at.take() {
+                g.started_at += (now - at).max(0);
+            }
+            g.status = "active".into();
+        }
+    });
+    if !rt.is_running() {
+        turn::spawn_turn(
+            engine,
+            rt.clone(),
+            vec![UserInput::text(format!(
+                "[goal] Resume working toward the goal: {}. Check progress, then take the next concrete step.",
+                g.objective
+            ))],
+            TurnOpts { synthetic: true, ..Default::default() },
         );
     }
     Ok(ThreadResponse { thread: t })
@@ -574,6 +619,7 @@ pub async fn shell_command(engine: &Engine, p: ShellCommandParams) -> EResult<Em
             PathBuf::from(&t.cwd),
         );
         req.policy = odex_sandbox::SandboxPolicy::FullAccess;
+        req.env.extend(crate::worktrees::thread_env_vars(&e2, &t));
         req.timeout = Some(std::time::Duration::from_millis(p.timeout_ms.unwrap_or(600_000) as u64));
         let em = e2.emitter();
         let (tid, trn, iid) = (rt.id.clone(), turn.id.clone(), item_id.clone());
@@ -654,13 +700,16 @@ pub async fn review_start(engine: &Engine, p: ReviewStartParams) -> EResult<Turn
     };
     let reviewer = engine.role_model(ModelRole::Reviewer, Some(&t)).map(|h| h.model.key.clone());
     let diff_clip = odex_context::summary::clip_middle(&diff, 120_000);
-    let hidden = format!("Diff under review ({what}):\n```diff\n{diff_clip}\n```");
+    let mut hidden = format!("Diff under review ({what}):\n```diff\n{diff_clip}\n```");
     let mut text = format!("Review {what}.");
     if let Some(i) = &p.instructions {
         text.push_str(&format!(" Focus: {i}"));
     }
-    if let Some(r) = &engine.thread_settings(&t).raw.custom_instructions {
-        let _ = r;
+    // Settings → Code review: the user's standing review guidelines
+    if let Some(r) =
+        engine.thread_settings(&t).raw.review_instructions.as_deref().map(str::trim).filter(|r| !r.is_empty())
+    {
+        hidden.push_str(&format!("\n\nReview guidelines from the user (always apply):\n{r}"));
     }
     if rt.is_running() {
         return Err(EngineError::new(jsonrpc::error_codes::THREAD_BUSY, "a turn is running"));
@@ -700,6 +749,7 @@ pub fn model_list(engine: &Engine) -> ModelListResponse {
 pub async fn provider_list(engine: &Engine, p: ProviderListParams) -> ProviderListResponse {
     if p.refresh {
         engine.registry.refresh().await;
+        crate::model_watch::check_all(engine);
     }
     ProviderListResponse { providers: engine.registry.providers() }
 }
@@ -728,6 +778,7 @@ pub async fn provider_upsert(engine: &Engine, p: ProviderUpsertParams) -> EResul
             engine.emitter().request(server_request::SECRETS_STORE, &SecretsStoreParams { key, value: Some(k) }).await;
     }
     engine.registry.refresh().await;
+    crate::model_watch::check_all(engine);
     let list = ProviderListResponse { providers: engine.registry.providers() };
     engine.emitter().raw(notification::PROVIDERS_UPDATED, &ProvidersNotification { providers: list.providers.clone() });
     Ok(list)
@@ -745,6 +796,7 @@ pub async fn provider_remove(engine: &Engine, p: ProviderIdParams) -> EResult<Pr
     engine.registry.set_secret(&key, None);
     let _ = engine.emitter().request(server_request::SECRETS_STORE, &SecretsStoreParams { key, value: None }).await;
     engine.registry.refresh().await;
+    crate::model_watch::check_all(engine);
     Ok(ProviderListResponse { providers: engine.registry.providers() })
 }
 
@@ -770,6 +822,7 @@ pub async fn provider_test(engine: &Engine, p: ProviderTestParams) -> EResult<Pr
 
 pub async fn doctor_run(engine: &Engine, p: DoctorRunParams) -> EResult<DoctorRunResponse> {
     engine.registry.refresh().await;
+    crate::model_watch::check_all(engine);
     let mut handles = Vec::new();
     if let Some(m) = &p.model {
         handles.push(engine.registry.resolve(m).ok_or_else(|| bad(format!("model {m} not found")))?);
@@ -839,6 +892,7 @@ pub fn config_write(engine: &Engine, p: ConfigWriteParams) -> EResult<ConfigRead
         }
         if touches_providers {
             e2.registry.refresh().await;
+            crate::model_watch::check_all(&e2);
             e2.emitter()
                 .raw(notification::PROVIDERS_UPDATED, &ProvidersNotification { providers: e2.registry.providers() });
         }
@@ -848,92 +902,7 @@ pub fn config_write(engine: &Engine, p: ConfigWriteParams) -> EResult<ConfigRead
 
 // ==================================================================== projects
 
-fn load_actions(root: &Path) -> Vec<ProjectAction> {
-    #[derive(serde::Deserialize, Default)]
-    struct F {
-        #[serde(default)]
-        action: Vec<ProjectAction>,
-    }
-    std::fs::read_to_string(odex_config::project_dir(root).join("actions.toml"))
-        .ok()
-        .and_then(|t| toml::from_str::<F>(&t).ok())
-        .map(|f| f.action)
-        .unwrap_or_default()
-}
-
-pub fn load_environments(root: &Path) -> Vec<Environment> {
-    #[derive(serde::Deserialize)]
-    struct E {
-        id: String,
-        name: Option<String>,
-        setup_script: Option<String>,
-        #[serde(default)]
-        setup_scripts: std::collections::BTreeMap<String, String>,
-        #[serde(default)]
-        env: std::collections::BTreeMap<String, String>,
-    }
-    #[derive(serde::Deserialize, Default)]
-    struct F {
-        #[serde(default)]
-        environment: Vec<E>,
-    }
-    let os = if cfg!(windows) {
-        "windows"
-    } else if cfg!(target_os = "macos") {
-        "macos"
-    } else {
-        "linux"
-    };
-    std::fs::read_to_string(odex_config::project_dir(root).join("environments.toml"))
-        .ok()
-        .and_then(|t| toml::from_str::<F>(&t).ok())
-        .map(|f| {
-            f.environment
-                .into_iter()
-                .map(|e| Environment {
-                    name: e.name.unwrap_or_else(|| e.id.clone()),
-                    setup_script: e.setup_scripts.get(os).cloned().or(e.setup_script),
-                    id: e.id,
-                    env: e.env,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn save_actions(root: &Path, actions: &[ProjectAction]) -> std::io::Result<()> {
-    #[derive(serde::Serialize)]
-    struct F<'a> {
-        action: &'a [ProjectAction],
-    }
-    std::fs::create_dir_all(odex_config::project_dir(root))?;
-    let text = toml::to_string_pretty(&F { action: actions }).map_err(|e| std::io::Error::other(e.to_string()))?;
-    std::fs::write(odex_config::project_dir(root).join("actions.toml"), text)
-}
-
-fn save_environments(root: &Path, envs: &[Environment]) -> std::io::Result<()> {
-    #[derive(serde::Serialize)]
-    struct E<'a> {
-        id: &'a str,
-        name: &'a str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        setup_script: &'a Option<String>,
-        env: &'a std::collections::BTreeMap<String, String>,
-    }
-    #[derive(serde::Serialize)]
-    struct F<'a> {
-        environment: Vec<E<'a>>,
-    }
-    std::fs::create_dir_all(odex_config::project_dir(root))?;
-    let f = F {
-        environment: envs
-            .iter()
-            .map(|e| E { id: &e.id, name: &e.name, setup_script: &e.setup_script, env: &e.env })
-            .collect(),
-    };
-    let text = toml::to_string_pretty(&f).map_err(|e| std::io::Error::other(e.to_string()))?;
-    std::fs::write(odex_config::project_dir(root).join("environments.toml"), text)
-}
+use crate::worktrees::{load_actions, load_environments, save_actions, save_environments};
 
 fn hydrate(engine: &Engine, mut p: Project) -> Project {
     let root = PathBuf::from(p.primary_folder());
@@ -1051,6 +1020,12 @@ pub fn project_remove(engine: &Engine, p: ProjectIdParams) -> EResult<EmptyRespo
     engine.store.delete_project(&p.id).map_err(EngineError::from)?;
     notify_projects(engine);
     Ok(EmptyResponse {})
+}
+
+/// Context-aware starter prompts for the home composer (utility model; empty on failure).
+pub async fn project_suggest_prompts(engine: &Engine, p: ProjectIdParams) -> EResult<SuggestPromptsResponse> {
+    let project = engine.project(&p.id)?;
+    Ok(SuggestPromptsResponse { prompts: crate::starters::suggest(engine, &project).await })
 }
 
 pub fn trust_check(engine: &Engine, p: PathParams) -> TrustCheckResponse {
@@ -1236,9 +1211,10 @@ pub async fn git_commit_message(engine: &Engine, p: CommitMessageParams) -> ERes
         task.map(|t| format!("Task context: {}\n\n", t.chars().take(800).collect::<String>())).unwrap_or_default(),
         odex_context::summary::clip_middle(&diff, 24_000)
     );
+    let extra = git_toml(engine, &p.cwd, t.as_ref()).commit_prompt;
     let req = ChatRequest {
         messages: vec![
-            ChatMessage::system("Write a git commit message for this diff. Subject: imperative mood, at most 72 characters, no trailing period. Body: 1-4 short lines explaining what and why (empty for trivial changes). JSON only."),
+            ChatMessage::system(with_user_prompt("Write a git commit message for this diff. Subject: imperative mood, at most 72 characters, no trailing period. Body: 1-4 short lines explaining what and why (empty for trivial changes). JSON only.", extra.as_deref())),
             ChatMessage::user(user),
         ],
         max_tokens: Some(400),
@@ -1267,7 +1243,14 @@ pub async fn git_commit_message(engine: &Engine, p: CommitMessageParams) -> ERes
     Ok(CommitMessageResponse { message: msg })
 }
 
-pub async fn git_push(p: GitPushParams) -> EResult<CommandOutputResponse> {
+pub async fn git_push(engine: &Engine, p: GitPushParams) -> EResult<CommandOutputResponse> {
+    // user-level only: a cloned project's config must not enable force pushes
+    let allow_force = engine.user_settings().raw.git.and_then(|g| g.allow_force_push).unwrap_or(false);
+    if p.force_with_lease && !allow_force {
+        return Err(bad(
+            "force push is disabled; turn on \"Allow force push\" in Settings → Git (git.allow_force_push)",
+        ));
+    }
     match Git::new(&p.cwd).push(p.remote.as_deref(), p.branch.as_deref(), p.set_upstream, p.force_with_lease).await {
         Ok(out) => Ok(CommandOutputResponse { ok: true, output: out }),
         Err(e) => Ok(CommandOutputResponse { ok: false, output: e.to_string() }),
@@ -1302,20 +1285,47 @@ pub async fn worktree_handoff(engine: &Engine, p: HandoffParams) -> EResult<Hand
     Ok(res)
 }
 
+/// Worktrees on disk, of active and archived threads (newest thread first).
 pub async fn worktree_list(engine: &Engine) -> EResult<WorktreeListResponse> {
-    let threads = engine
-        .store
-        .list_threads(&ThreadListParams { archived: None, limit: Some(5000), ..Default::default() })
-        .map_err(EngineError::from)?;
-    let (worktrees, thread_ids) = threads.into_iter().filter_map(|t| t.worktree.map(|w| (w, t.id))).unzip();
+    let mut threads = Vec::new();
+    for archived in [false, true] {
+        let params = ThreadListParams { archived: Some(archived), limit: Some(5000), ..Default::default() };
+        threads.extend(engine.store.list_threads(&params).map_err(EngineError::from)?);
+    }
+    let (worktrees, thread_ids) = threads
+        .into_iter()
+        .map(|t| engine.loaded(&t.id).map(|rt| rt.thread()).unwrap_or(t))
+        .filter_map(|t| t.worktree.filter(|w| Path::new(&w.path).is_dir()).map(|w| (w, t.id)))
+        .unzip();
     Ok(WorktreeListResponse { worktrees, thread_ids })
+}
+
+/// `worktree/fromLocal`: move a local thread (and the checkout's uncommitted changes) into a worktree.
+pub async fn worktree_from_local(engine: &Engine, p: WorktreeFromLocalParams) -> EResult<WorktreeFromLocalResponse> {
+    crate::worktrees::from_local(engine, p).await
+}
+
+/// `worktree/setup`: run the thread's environment setup script again.
+pub async fn worktree_setup(engine: &Engine, p: ThreadIdParams) -> EResult<ThreadResponse> {
+    let rt = engine.thread(&p.thread_id)?;
+    if !crate::worktrees::start_setup(engine, &rt)? {
+        return Err(bad("this thread's environment has no setup script for this OS"));
+    }
+    Ok(ThreadResponse { thread: rt.thread() })
+}
+
+/// `worktree/prune`: apply `[worktrees] keep` now (also when `auto_cleanup` is off).
+pub async fn worktree_prune(engine: &Engine) -> EResult<WorktreePruneResponse> {
+    let (keep, _) = crate::worktrees::retention(engine);
+    Ok(WorktreePruneResponse { removed: crate::worktrees::prune(engine, keep).await })
 }
 
 pub async fn worktree_remove(engine: &Engine, p: ThreadIdParams) -> EResult<EmptyResponse> {
     let rt = engine.thread(&p.thread_id)?;
     let t = rt.thread();
     let wt = t.worktree.clone().ok_or_else(|| bad("no worktree"))?;
-    let _ = Git::new(&wt.path).snapshot(&format!("refs/odex/archived/{}", t.id), "odex: removed worktree").await;
+    crate::worktrees::cancel_setup(&t.id);
+    let _ = Git::new(&wt.path).snapshot(&crate::worktrees::archived_ref(&t.id), "odex: removed worktree").await;
     Git::new(&wt.repo_root).worktree_remove(Path::new(&wt.path), true).await.map_err(git_err)?;
     engine.update_thread(&rt, |t| {
         t.worktree = None;
@@ -1325,27 +1335,95 @@ pub async fn worktree_remove(engine: &Engine, p: ThreadIdParams) -> EResult<Empt
     Ok(EmptyResponse {})
 }
 
-fn github_token(engine: &Engine) -> Option<String> {
-    engine.secrets.read().unwrap().get("github:token").cloned()
+/// The `[git]` table for a folder (or a thread's project).
+fn git_toml(engine: &Engine, cwd: &str, thread: Option<&Thread>) -> odex_protocol::config_types::GitToml {
+    let s = match thread {
+        Some(t) => engine.thread_settings(t),
+        None => engine.settings_for(Some(Path::new(cwd))),
+    };
+    s.raw.git.unwrap_or_default()
+}
+
+/// A utility-model system prompt plus the user's extra instructions from Settings → Git.
+fn with_user_prompt(base: &str, extra: Option<&str>) -> String {
+    match extra.map(str::trim).filter(|e| !e.is_empty()) {
+        Some(e) => format!("{base}\n\nAdditional instructions from the user:\n{e}"),
+        None => base.to_string(),
+    }
+}
+
+/// GitHub access: the desktop's `github:token` secret (pushed live with `secrets/set`), then
+/// `GITHUB_TOKEN` / `GH_TOKEN`; `ODEX_GITHUB_API` overrides the REST base.
+fn github(engine: &Engine) -> odex_git::pr::GithubConfig {
+    let token = engine.secrets.read().unwrap().get("github:token").cloned();
+    odex_git::pr::GithubConfig::resolve(token.as_deref())
+}
+
+/// Record a PR summary on a thread (badges); only publishes real changes.
+fn set_thread_pr(engine: &Engine, thread_id: &str, pr: ThreadPr) {
+    let Ok(rt) = engine.thread(thread_id) else { return };
+    let cur = rt.thread().pr;
+    let same = cur.as_ref().is_some_and(|c| {
+        c.number == pr.number
+            && c.state == pr.state
+            && c.url == pr.url
+            && c.title == pr.title
+            && c.checks == pr.checks
+            && c.failed_checks == pr.failed_checks
+    });
+    if !same {
+        engine.update_thread(&rt, |t| t.pr = Some(pr));
+    }
+}
+
+fn thread_pr_of(pr: &PullRequest) -> ThreadPr {
+    let (checks, failed_checks) = odex_git::pr::summarize_checks(&pr.checks);
+    ThreadPr {
+        number: pr.number,
+        state: pr.state.clone(),
+        url: pr.url.clone(),
+        title: Some(pr.title.clone()).filter(|t| !t.is_empty()),
+        checks,
+        failed_checks,
+        updated_at: now_ms(),
+    }
 }
 
 pub async fn pr_create(engine: &Engine, p: PrCreateParams) -> EResult<PrCreateResponse> {
-    let (url, number) = odex_git::pr::create(
-        Path::new(&p.cwd),
-        &p.title,
-        &p.body,
-        p.base.as_deref(),
-        p.draft,
-        github_token(engine).as_deref(),
-    )
-    .await
-    .map_err(git_err)?;
+    let (url, number) =
+        odex_git::pr::create(Path::new(&p.cwd), &p.title, &p.body, p.base.as_deref(), p.draft, &github(engine))
+            .await
+            .map_err(git_err)?;
+    if let (Some(tid), Some(n)) = (p.thread_id.as_deref(), number) {
+        let state = if p.draft { "draft" } else { "open" };
+        let title = Some(p.title.clone()).filter(|t| !t.trim().is_empty());
+        let pr = ThreadPr {
+            number: n,
+            state: state.into(),
+            url: url.clone(),
+            title,
+            checks: None,
+            failed_checks: 0,
+            updated_at: now_ms(),
+        };
+        set_thread_pr(engine, tid, pr);
+    }
     Ok(PrCreateResponse { url, number })
 }
 
 pub async fn pr_view(engine: &Engine, p: PrViewParams) -> EResult<PrViewResponse> {
-    match odex_git::pr::view(Path::new(&p.cwd), p.number, github_token(engine).as_deref()).await {
-        Ok(pr) => Ok(PrViewResponse { pr, error: None }),
+    match odex_git::pr::view(Path::new(&p.cwd), p.number, &github(engine)).await {
+        Ok(pr) => {
+            if let (Some(tid), Some(found)) = (p.thread_id.as_deref(), pr.as_ref()) {
+                // the thread's own branch, or the PR already linked to it
+                let linked =
+                    engine.thread(tid).ok().and_then(|rt| rt.thread().pr).is_some_and(|x| x.number == found.number);
+                if p.number.is_none() || linked {
+                    set_thread_pr(engine, tid, thread_pr_of(found));
+                }
+            }
+            Ok(PrViewResponse { pr, error: None })
+        }
         Err(e) => Ok(PrViewResponse { pr: None, error: Some(e.to_string()) }),
     }
 }
@@ -1354,20 +1432,54 @@ pub async fn pr_comment(engine: &Engine, p: PrCommentParams) -> EResult<CommandO
     if !p.confirmed {
         return Err(bad("posting review comments requires explicit confirmation"));
     }
-    let event = "COMMENT";
+    let event = p.event.as_deref().unwrap_or("comment");
+    if odex_git::pr::normalize_event(event).is_none() {
+        return Err(bad(format!("unknown review event {event:?} (use comment, approve or requestChanges)")));
+    }
     match odex_git::pr::submit_review(
         Path::new(&p.cwd),
         p.number,
         &p.comments,
         p.body.as_deref(),
         event,
-        github_token(engine).as_deref(),
+        &github(engine),
     )
     .await
     {
         Ok(out) => Ok(CommandOutputResponse { ok: true, output: out }),
         Err(e) => Ok(CommandOutputResponse { ok: false, output: e.to_string() }),
     }
+}
+
+pub async fn pr_list(engine: &Engine, p: PrListParams) -> EResult<PrListResponse> {
+    match odex_git::pr::list(Path::new(&p.cwd), &github(engine)).await {
+        Ok(prs) => Ok(PrListResponse { prs, error: None }),
+        Err(e) => Ok(PrListResponse { prs: vec![], error: Some(e.to_string()) }),
+    }
+}
+
+pub async fn pr_check_log(engine: &Engine, p: PrCheckLogParams) -> EResult<PrCheckLogResponse> {
+    let (text, truncated) =
+        odex_git::pr::check_log(Path::new(&p.cwd), p.check_id.as_deref(), p.url.as_deref(), &github(engine))
+            .await
+            .map_err(|e| bad(format!("could not fetch the log of {}: {e}", p.name)))?;
+    Ok(PrCheckLogResponse { text, truncated })
+}
+
+/// Update one in-memory secret (the desktop stored it encrypted); applies without a restart.
+pub fn secrets_set(engine: &Engine, p: SecretsStoreParams) -> EmptyResponse {
+    let value = p.value.filter(|v| !v.is_empty());
+    engine.registry.set_secret(&p.key, value.clone());
+    let mut s = engine.secrets.write().unwrap();
+    match value {
+        Some(v) => {
+            s.insert(p.key, v);
+        }
+        None => {
+            s.remove(&p.key);
+        }
+    }
+    EmptyResponse {}
 }
 
 pub async fn pr_draft(engine: &Engine, p: CommitMessageParams) -> EResult<PrDraftResponse> {
@@ -1390,9 +1502,10 @@ pub async fn pr_draft(engine: &Engine, p: CommitMessageParams) -> EResult<PrDraf
         });
     };
     let schema = json!({"type": "object", "properties": {"title": {"type": "string"}, "body": {"type": "string"}}, "required": ["title", "body"]});
+    let extra = git_toml(engine, &p.cwd, t.as_ref()).pr_prompt;
     let req = ChatRequest {
         messages: vec![
-            ChatMessage::system("Write a GitHub pull request title (under 72 chars) and a Markdown body with a Summary section and a Testing section, from the commits and changed files. JSON only."),
+            ChatMessage::system(with_user_prompt("Write a GitHub pull request title (under 72 chars) and a Markdown body with a Summary section and a Testing section, from the commits and changed files. JSON only.", extra.as_deref())),
             ChatMessage::user(summary.clone()),
         ],
         max_tokens: Some(800),
@@ -1454,7 +1567,10 @@ pub fn mcp_logs(engine: &Engine, p: NameParams) -> McpLogsResponse {
 
 pub async fn mcp_login(engine: &Engine, p: NameParams) -> EResult<McpLoginResponse> {
     let url = engine.ext.mcp.login(&p.name).await.map_err(|e| bad(format!("{e:#}")))?;
-    engine.emitter().raw(notification::OPEN_URL, &OpenUrlNotification { url: url.clone(), target: "external".into() });
+    engine.emitter().raw(
+        notification::OPEN_URL,
+        &OpenUrlNotification { url: url.clone(), target: "external".into(), source: None },
+    );
     Ok(McpLoginResponse { authorization_url: Some(url), message: "Complete sign-in in your browser.".into() })
 }
 
@@ -1466,6 +1582,34 @@ pub async fn mcp_logout(engine: &Engine, p: NameParams) -> EResult<EmptyResponse
 pub async fn mcp_read_resource(engine: &Engine, p: McpReadResourceParams) -> EResult<McpReadResourceResponse> {
     Ok(McpReadResourceResponse {
         contents: engine.ext.mcp.read_resource(&p.server, &p.uri).await.map_err(|e| bad(format!("{e:#}")))?,
+    })
+}
+
+/// `prompts/get`, with the prompt's messages flattened to text for the composer.
+pub async fn mcp_get_prompt(engine: &Engine, p: McpGetPromptParams) -> EResult<McpGetPromptResponse> {
+    let args = p.arguments.map(|a| json!(a)).unwrap_or(Value::Null);
+    let v = engine.ext.mcp.get_prompt(&p.server, &p.name, args).await.map_err(|e| bad(format!("{e:#}")))?;
+    let part_text = |c: &Value| -> Option<String> {
+        match c.get("type").and_then(Value::as_str) {
+            Some("text") => c.get("text").and_then(Value::as_str).map(str::to_string),
+            Some("resource") => {
+                c.get("resource").and_then(|r| r.get("text")).and_then(Value::as_str).map(str::to_string)
+            }
+            _ => None,
+        }
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for m in v.get("messages").and_then(Value::as_array).into_iter().flatten() {
+        match m.get("content") {
+            Some(Value::Array(items)) => parts.extend(items.iter().filter_map(part_text)),
+            Some(Value::String(s)) => parts.push(s.clone()),
+            Some(c) => parts.extend(part_text(c)),
+            None => {}
+        }
+    }
+    Ok(McpGetPromptResponse {
+        description: v.get("description").and_then(Value::as_str).map(str::to_string),
+        text: parts.join("\n\n"),
     })
 }
 
@@ -1522,6 +1666,9 @@ pub fn skills_delete(engine: &Engine, p: NameParams) -> EResult<EmptyResponse> {
     let (skill, _) = find_skill_anywhere(engine, &p.name).ok_or_else(|| bad("skill not found"))?;
     if skill.scope == SkillScope::Plugin {
         return Err(bad("plugin skills are removed with their plugin"));
+    }
+    if skill.scope == SkillScope::Builtin {
+        return Err(bad("built-in skills can't be deleted; disable them instead"));
     }
     if let Some(dir) = Path::new(&skill.path).parent() {
         std::fs::remove_dir_all(dir).map_err(|e| bad(e.to_string()))?;

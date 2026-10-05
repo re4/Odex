@@ -1,13 +1,15 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import { Compartment, EditorState, StateEffect, StateField, type Extension } from '@codemirror/state'
+import { Compartment, EditorState, Prec, RangeSet, StateEffect, StateField, type Extension } from '@codemirror/state'
 import {
   Decoration,
   type DecorationSet,
   EditorView,
+  GutterMarker,
   type ViewUpdate,
   crosshairCursor,
   drawSelection,
   dropCursor,
+  gutter,
   highlightActiveLine,
   highlightActiveLineGutter,
   highlightSpecialChars,
@@ -39,7 +41,7 @@ const wrapSlot = new Compartment()
 const readOnlySlot = new Compartment()
 
 /** Per-view callbacks (states are shared, handlers belong to the mounted component). */
-const handlers = new WeakMap<EditorView, { save?: () => void; update?: (u: ViewUpdate) => void }>()
+const handlers = new WeakMap<EditorView, { save?: () => void; update?: (u: ViewUpdate) => void; navigate?: (dir: -1 | 1) => void }>()
 
 export function isDarkTheme(): boolean {
   return document.documentElement.dataset.theme === 'dark'
@@ -140,6 +142,8 @@ function buildTheme(dark: boolean): Extension {
         '.cm-tooltip': { backgroundColor: 'var(--bg-elev)', border: '1px solid var(--border)', color: 'var(--fg)' },
         '.cm-specialChar': { color: 'var(--danger)' },
         '.cm-flash-line': { animation: 'odex-flash-line 1.8s ease-out forwards' },
+        '.cm-agent-gutter .cm-gutterElement': { padding: '0', display: 'flex', alignItems: 'stretch' },
+        '.cm-agent-edit': { width: '3px', marginLeft: '1px', marginRight: '3px', background: 'var(--accent)', borderRadius: '1px', cursor: 'help' },
       },
       { dark },
     ),
@@ -160,9 +164,67 @@ const flashField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 })
 
+// ---- line annotations (lines the agent edited in this thread) in a gutter
+
+/** A gutter annotation on a 1-based line. */
+export interface LineAnnotation {
+  line: number
+  label: string
+}
+
+const setAnnotationsEffect = StateEffect.define<LineAnnotation[]>()
+
+class EditMarker extends GutterMarker {
+  constructor(readonly label: string) {
+    super()
+  }
+  eq(other: GutterMarker): boolean {
+    return other instanceof EditMarker && other.label === this.label
+  }
+  toDOM(): Node {
+    const el = document.createElement('div')
+    el.className = 'cm-agent-edit'
+    el.title = this.label
+    el.setAttribute('aria-label', this.label)
+    return el
+  }
+}
+
+const annotationField = StateField.define<RangeSet<GutterMarker>>({
+  create: () => RangeSet.empty,
+  update(set, tr) {
+    let next = set.map(tr.changes)
+    for (const e of tr.effects) {
+      if (!e.is(setAnnotationsEffect)) continue
+      const doc = tr.state.doc
+      const seen = new Set<number>()
+      const ranges = e.value
+        .filter((a) => a.line >= 1 && a.line <= doc.lines && !seen.has(a.line) && (seen.add(a.line), true))
+        .sort((a, b) => a.line - b.line)
+        .map((a) => new EditMarker(a.label).range(doc.line(a.line).from))
+      next = RangeSet.of(ranges, true)
+    }
+    return next
+  },
+})
+
+const annotationGutter = gutter({ class: 'cm-agent-gutter', markers: (v) => v.state.field(annotationField) })
+
+/** Replace a view's gutter annotations. */
+export function setEditorAnnotations(view: EditorView, annotations: LineAnnotation[]): void {
+  view.dispatch({ effects: setAnnotationsEffect.of(annotations) })
+}
+
 export interface EditorOptions {
   readOnly?: boolean
   wrap?: boolean
+}
+
+function navigateFrom(v: EditorView, dir: -1 | 1): boolean {
+  const nav = handlers.get(v)?.navigate
+  if (!nav) return false
+  nav(dir)
+  return true
 }
 
 /** Build the editor state for one file. */
@@ -171,7 +233,16 @@ export function createEditorState(doc: string, path: string, opts: EditorOptions
     doc,
     extensions: [
       lineNumbers(),
+      annotationField,
+      annotationGutter,
       highlightActiveLineGutter(),
+      // Alt+Left / Alt+Right: back / forward between files (Files panel)
+      Prec.high(
+        keymap.of([
+          { key: 'Alt-ArrowLeft', run: (v) => navigateFrom(v, -1) },
+          { key: 'Alt-ArrowRight', run: (v) => navigateFrom(v, 1) },
+        ]),
+      ),
       highlightSpecialChars(),
       history(),
       foldGutter({ openText: '▾', closedText: '▸' }),
@@ -242,6 +313,10 @@ export interface CodeEditorProps {
   wrap?: boolean
   readOnly?: boolean
   label?: string
+  /** Gutter markers (e.g. lines the agent edited); keep the array identity stable. */
+  annotations?: LineAnnotation[]
+  /** Alt+Left / Alt+Right inside the editor. */
+  onNavigate?: (dir: -1 | 1) => void
 }
 
 export function CodeEditor(props: CodeEditorProps) {
@@ -257,7 +332,11 @@ export function CodeEditor(props: CodeEditorProps) {
     const view = new EditorView({ state: latest.current.getState(), parent: el })
     viewRef.current = view
     keyRef.current = latest.current.docKey
-    handlers.set(view, { save: () => latest.current.onSave?.(), update: (u) => latest.current.onUpdate?.(u) })
+    handlers.set(view, {
+      save: () => latest.current.onSave?.(),
+      update: (u) => latest.current.onUpdate?.(u),
+      navigate: (dir) => latest.current.onNavigate?.(dir),
+    })
     view.dispatch({ effects: themeSlot.reconfigure(themeFor(isDarkTheme())) })
     view.contentDOM.setAttribute('aria-label', latest.current.label ?? 'Editor')
     if (!latest.current.reveal) restoreScroll(view, keyRef.current)
@@ -304,6 +383,12 @@ export function CodeEditor(props: CodeEditorProps) {
     const view = viewRef.current
     if (view) setEditorOptions(view, { wrap: !!props.wrap, readOnly: !!props.readOnly })
   }, [props.wrap, props.readOnly, props.docKey])
+
+  // gutter annotations (re-applied after a document swap)
+  useEffect(() => {
+    const view = viewRef.current
+    if (view) setEditorAnnotations(view, props.annotations ?? [])
+  }, [props.annotations, props.docKey])
 
   // reveal a line
   const revealAt = props.reveal?.at

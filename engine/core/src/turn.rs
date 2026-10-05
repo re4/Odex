@@ -121,6 +121,8 @@ pub fn spawn_turn(engine: &Engine, rt: Arc<ThreadRt>, input: Vec<UserInput>, opt
     let e = engine.clone();
     let t2 = turn.clone();
     tokio::spawn(async move {
+        // a new worktree's environment setup script finishes before the agent starts
+        crate::worktrees::wait_for_setup(&e, &rt, &cancel).await;
         let finished = run_turn(&e, rt.clone(), t2, input, opts, cancel, rx).await;
         after_turn(&e, rt, finished).await;
     });
@@ -630,6 +632,7 @@ async fn run_turn(
     } else {
         notice(engine, &rt, &turn.id, NoticeLevel::Info, inputs_text(&input), Some("synthetic"));
     }
+    crate::model_watch::on_turn_start(engine, &rt, &turn.id, main.as_ref().ok());
     let text = inputs_text(&input);
     {
         let mut ot = rt.original_task.lock().unwrap();

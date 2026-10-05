@@ -1,0 +1,46 @@
+/* Composer completion menu (@ / $ /) group headers and home starter prompts. */
+.mention-menu {
+  max-height: min(360px, 50vh);
+  scroll-padding: 22px 0 4px;
+}
+.mention-menu[data-below] {
+  top: 100%;
+  bottom: auto;
+  margin-top: 6px;
+  margin-bottom: 0;
+}
+.mention-menu .mention-group {
+  position: sticky;
+  top: -4px;
+  z-index: 1;
+  margin: 0 -4px;
+  padding: 6px 12px 3px;
+  background: var(--bg-elev);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10.5px;
+}
+.mention-menu .mention-group:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.mention-menu .menu-item > svg {
+  flex: none;
+  color: var(--fg-muted);
+}
+.mention-menu .menu-item > .ellipsis:first-of-type {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.starter-prompts .chip {
+  max-width: 100%;
+}
+.starter-prompts .chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.starter-prompts .chip > svg {
+  flex: none;
+  color: var(--accent);
+}

@@ -20,6 +20,8 @@ Contents:
 [`[memories]`](#memories) ·
 [`[notifications]`](#notifications) ·
 [`[automatic_review]`](#automatic_review) ·
+[`[git]`](#git) ·
+[`[worktrees]`](#worktrees) ·
 [`[skills]`](#skills) ·
 [`[features]`](#features) ·
 [`[profiles]`](#profilesname) ·
@@ -96,6 +98,7 @@ Odex merges settings in this order. A later layer wins key by key, and tables me
 | `custom_instructions` | string | none | Text appended to every system prompt ("Personalization"). |
 | `default_shell` | string | `powershell` on Windows, `zsh` on macOS, else `bash` | Shell for the agent's `shell` tool: `powershell`, `pwsh`, `cmd`, `bash`, `zsh` or `sh`. |
 | `worktrees_dir` | path | `~/.odex/worktrees` | Root directory for thread worktrees. |
+| `review_instructions` | string | none | Standing guidelines appended to every review the agent runs (`/review`, "Ask agent to review"). Settings → Code review. The reviewer model is `roles.reviewer`. |
 
 ```toml
 model = "coder"
@@ -375,6 +378,46 @@ Reserved. The desktop app keeps notification preferences in `~/.odex/desktop.jso
 | `enabled` | bool | `false` | The `reviewer` model judges each escalation request (sandbox escape, network, writes outside the workspace) against your goal and a risk rubric. It allows, denies or asks you. `/approve` overrides one denial. |
 | `rubric` | string | none | Extra rubric text appended to the reviewer prompt. |
 
+## `[git]`
+
+Settings → Git edits this table.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `branch_prefix` | string | `"odex/"` | Prefix of the branch created for each worktree thread (`<prefix><thread-name>-<id>`). `""` means no prefix. Characters that are not valid in a ref name become `-`. |
+| `allow_force_push` | bool | `false` | Offer "Force with lease" in the push dialog. While it is off, `git/push` refuses `--force-with-lease`. Only the user config counts: a project's `.odex/config.toml` cannot turn it on. |
+| `commit_prompt` | string | none | Extra instructions appended to the `utility` model's prompt when it writes a commit message. |
+| `pr_prompt` | string | none | Extra instructions appended to the prompt that drafts a pull request title and description. |
+
+```toml
+review_instructions = "Flag SQL built with string formatting. New endpoints need tests."
+
+[git]
+branch_prefix = "me/"
+allow_force_push = true
+commit_prompt = "Use Conventional Commits (feat:, fix:, chore:)."
+pr_prompt = "Add a Risks section."
+```
+
+**GitHub access.** Pull requests (create, view, inbox, reviews, check logs) use the GitHub CLI (`gh`) when it is installed, otherwise the REST API. The token is, in order: the one saved in Settings → Git (stored encrypted as the `github:token` secret, see [Secrets](#secrets); `gh` is run with it as `GH_TOKEN`), then `GITHUB_TOKEN`, then `GH_TOKEN`. The repository is taken from the `origin` remote; GitHub Enterprise hosts use `https://<host>/api/v3`. `ODEX_GITHUB_API` (environment) overrides the REST base URL and always selects the REST API, for proxies and tests.
+
+## `[worktrees]`
+
+Retention of thread worktrees (Settings → Worktrees edits this table; `worktrees_dir` above sets where they live).
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `keep` | integer | `15` | Worktrees to keep on disk. When there are more (counting active and archived threads), the oldest worktrees of **archived** threads are removed, least recently updated first. Worktrees of active threads are never removed automatically. |
+| `auto_cleanup` | bool | `true` | Apply `keep` automatically after a thread is archived and after a worktree is created. When off, Settings → Worktrees → "Clean up now" (`worktree/prune`) applies it on demand. |
+
+Before a worktree is removed (by retention, by archiving with "remove worktree", or from Settings), its full working tree, including uncommitted and untracked files, is saved under the hidden ref `refs/odex/archived/<thread-id>`; a worktree whose snapshot fails is kept. The thread keeps its branch and worktree info, so **unarchiving the thread re-creates the worktree** from its branch and restores the snapshot. If that is impossible (the branch is gone), the thread continues in the local checkout.
+
+```toml
+[worktrees]
+keep = 30
+auto_cleanup = true
+```
+
 ## `[skills]`
 
 Skills live in `~/.odex/skills/<name>/SKILL.md` and in a trusted project's `.odex/skills/`. Only the front-matter `name` and `description` go into the prompt; the body loads when the skill is used.
@@ -433,7 +476,7 @@ Use a TOML literal string (single quotes) for Windows paths so you don't have to
 
 Prefer one of these to `api_key` in plain text:
 
-1. **The desktop app's encrypted store.** Keys you enter in Settings → Models & Endpoints, and the GitHub token for PRs, are encrypted with Electron `safeStorage` (DPAPI on Windows, Keychain on macOS, libsecret on Linux) and saved in `~/.odex/secrets.json`. When the engine starts, the desktop decrypts them and passes them in the `initialize` request. The engine keeps them in memory only and never writes them to disk or logs. A stored key (`provider:<id>:api_key`) takes precedence over `api_key` and `api_key_env`. On Linux without a keyring, the app refuses to store keys in plain text; use `api_key_env` instead.
+1. **The desktop app's encrypted store.** Keys you enter in Settings → Models & Endpoints, and the GitHub token for PRs, are encrypted with Electron `safeStorage` (DPAPI on Windows, Keychain on macOS, libsecret on Linux) and saved in `~/.odex/secrets.json`. When the engine starts, the desktop decrypts them and passes them in the `initialize` request; a key saved later is pushed to the running engine with `secrets/set`, so it applies without a restart. The engine keeps them in memory only and never writes them to disk or logs. A stored key (`provider:<id>:api_key`) takes precedence over `api_key` and `api_key_env`. On Linux without a keyring, the app refuses to store keys in plain text; use `api_key_env` instead.
 2. **`api_key_env`.** The engine reads the variable when it loads the config. This is the right choice for `odex-engine exec`, CI and the smoke suite.
 
 MCP OAuth tokens are the exception: the engine stores them itself, in `~/.odex/mcp_tokens.json` (D-022).
@@ -445,8 +488,8 @@ Inside a trusted project's `.odex/` directory:
 | File | Purpose |
 |---|---|
 | `.odex/config.toml` | Project config layer (see [restrictions](#layering-profiles-and-trust)). |
-| `.odex/actions.toml` | Run buttons: `[[action]]` with `id`, `name`, `command`, optional `cwd`, `icon` (`play`, `test`, `lint`, `build`, `server`) and `openUrl` (opened in the in-app browser once the action is running). |
-| `.odex/environments.toml` | Worktree environments: `[[environment]]` with `id`, `name`, `setup_script` (or per-OS `setup_scripts = { windows = "...", macos = "...", linux = "..." }`) and `env`. The setup script runs when a worktree is created: PowerShell on Windows, `sh` elsewhere. |
+| `.odex/actions.toml` | Run buttons: `[[action]]` with `id`, `name`, `command`, optional `commands = { windows = "...", macos = "...", linux = "..." }` (the entry for the current OS replaces `command`), `cwd`, `icon` (`play`, `test`, `lint`, `build`, `server`) and `openUrl` (opened in the in-app browser once the action is running). Actions run in the integrated terminal with the thread's environment variables. |
+| `.odex/environments.toml` | Environments: `[[environment]]` with `id`, `name`, `setup_script` (the default), per-OS `setup_scripts = { windows = "...", macos = "...", linux = "..." }` (the entry for the current OS replaces `setup_script`) and `env`. See [Environments](#environments). |
 | `.odex/skills/<name>/SKILL.md` | Project skills. |
 | `.odex/NOTES.md` | The agent's working notes. Pinned through compactions, capped by `context.notes_max_bytes`. |
 | `AGENTS.md` / `AGENTS.override.md` | Project instructions, discovered from the project root down to the cwd. An override file replaces the `AGENTS.md` in the same directory. Deeper files take precedence. `/init` generates one. |
@@ -473,6 +516,27 @@ icon = "test"
 [[environment]]
 id = "default"
 name = "Install deps"
-setup_scripts = { windows = "npm ci", linux = "npm ci", macos = "npm ci" }
+setup_script = "npm ci"
+setup_scripts = { windows = "npm.cmd ci --no-audit" }
 env = { NODE_ENV = "development" }
 ```
+
+### Environments
+
+**Which environment a thread uses.** `thread/start` takes an optional `environmentId`: an id from the project's `environments.toml` selects it (an unknown id is an error), and `""` means no environment. Without one, the thread uses the project's default environment (set in Edit project → Environments or Settings → Local environments; the default lives in the app's project list, not in the repository), and when no default is set, the **first** environment in the file. The first-environment fallback keeps a repository's committed `environments.toml` working in a fresh clone where nobody chose a default. The choice is stored on the thread (`Thread.environmentId`); "Move to worktree…" also offers a choice.
+
+**Setup script.** When a worktree is created for a thread (worktree mode, fork to worktree, or "Move to worktree…"), the environment's setup script for the current OS runs in the worktree in the background, without the sandbox, in the agent's `default_shell` (PowerShell on Windows unless configured otherwise), for at most 30 minutes. Its output goes to `~/.odex/logs/setup-<thread-id>.log`. The worktree's `setupStatus` is `running`, then `ok` or `failed (exit N): <last output>`; the thread header, the Git panel and Settings → Worktrees show it, with "Rerun setup" (`worktree/setup`) and the log. An agent turn started meanwhile waits for the script to finish. Besides the environment's variables, the script gets `ODEX_WORKTREE_PATH` (the new worktree), `ODEX_SOURCE_TREE_PATH` (the main checkout, e.g. to copy `.env` files) and `ODEX_ENVIRONMENT` (the environment id).
+
+**Variables.** `env` applies to the setup script, every command the agent runs (`shell`, `exec_command`), `!cmd` commands, and the integrated terminals and project actions opened for the thread. Odex's own variables (`ODEX`, `GIT_TERMINAL_PROMPT`, `PAGER`, …) win over them.
+
+Projects edited in the app keep both the default and the per-OS scripts; a client that sends an environment without `setupScripts` keeps the per-OS scripts already in the file (likewise `commands` of actions).
+
+### Desktop preferences for projects
+
+These live in `~/.odex/desktop.json` (not in the repository):
+
+| Setting | Where | Description |
+|---|---|---|
+| `editor` | Settings → General → "Open files in" | Command for "Open in editor". `{file}` and `{line}` (and `{col}`) are replaced inside each word, so `vim +{line} {file}` or `"C:\Program Files\Sublime Text\subl.exe" {file}:{line}` work with paths that contain spaces; each argument is quoted for `cmd.exe` on Windows and passed as-is elsewhere. Without `{file}`, `code`/`cursor`/`windsurf`/`codium` get `-g file:line` and other editors get the file appended. `system` opens the file with its default app. |
+| `projectEditors` | Edit project → General → "Open files with" | Per-project editor command (same format), keyed by project id. It applies to files under the project's folders and under worktrees of its threads. |
+| `openDevServerUrls` | Settings → General | Default on. When an agent's `exec_command` process or a project action's terminal prints a local URL with a port (`http://localhost:5173`, `127.0.0.1`, `0.0.0.0`, `[::1]`), it opens once per port in the in-app browser panel. Actions with an `openUrl` open that URL instead. |

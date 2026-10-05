@@ -278,6 +278,10 @@ impl Engine {
             diff_stats: None,
             usage: TokenUsage::default(),
             last_error: None,
+            last_model: None,
+            model_warning: None,
+            pr: None,
+            environment_id: p.environment_id.clone(),
         };
         let writer =
             RolloutWriter::create(&self.home.sessions_dir(), &id).map_err(|e| EngineError::from(anyhow!(e)))?;
@@ -437,6 +441,7 @@ impl Engine {
                 extra.push_str(&format!("- {}: {} ({})\n", sk.name, sk.description, sk.path));
             }
         }
+        extra.push_str(&mcp_instructions_block(self.ext.mcp.instructions()));
         match mode {
             TurnMode::Plan => {
                 extra.push('\n');
@@ -550,7 +555,32 @@ impl Engine {
             followups: rt.followups.lock().unwrap().clone(),
             queued: rt.queue.lock().unwrap().clone(),
             rollout_path: rt.rollout_path().map(|p| p.to_string_lossy().to_string()),
+            summary: None,
         }
+    }
+
+    /// The latest compaction summary of a thread, for the summary card.
+    pub fn summary_card(&self, ctx: &ContextState) -> Option<ContextSummary> {
+        let s = ctx.summary.as_ref()?;
+        let d = &s.data;
+        Some(ContextSummary {
+            number: s.number,
+            llm: s.llm,
+            at: ctx.compactions.iter().rev().find(|c| c.summary_number == s.number).map(|c| c.at),
+            goal_and_requirements: d.goal_and_requirements.clone(),
+            decisions: d
+                .decisions
+                .iter()
+                .map(|x| SummaryDecision { decision: x.decision.clone(), reason: x.reason.clone() })
+                .collect(),
+            files_changed: d
+                .files_changed
+                .iter()
+                .map(|f| SummaryFile { path: f.path.clone(), purpose: f.purpose.clone(), state: f.state.clone() })
+                .collect(),
+            open_errors: d.open_errors.clone(),
+            next_steps: d.next_steps.clone(),
+        })
     }
 
     pub fn unload_idle(&self) {
@@ -559,10 +589,65 @@ impl Engine {
     }
 }
 
+/// Per-server cap on MCP `instructions` added to the system prompt.
+pub const MCP_INSTRUCTIONS_MAX_CHARS: usize = 1000;
+
+/// The `instructions` connected MCP servers sent in `initialize`, as a
+/// system-prompt section. Sorted by server name so the prompt prefix stays
+/// stable (KV cache) whatever order the servers connected in.
+pub fn mcp_instructions_block(mut list: Vec<(String, String)>) -> String {
+    list.retain(|(_, text)| !text.trim().is_empty());
+    if list.is_empty() {
+        return String::new();
+    }
+    list.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut out = String::from("\n# MCP server instructions\n");
+    for (name, text) in list {
+        let text = text.trim();
+        let clipped: String = text.chars().take(MCP_INSTRUCTIONS_MAX_CHARS).collect();
+        out.push_str(&format!("## {name}\n{}", clipped.trim_end()));
+        if clipped.len() < text.len() {
+            out.push_str(" […]");
+        }
+        out.push('\n');
+    }
+    out
+}
+
 pub fn plan_status(s: PlanStepStatus) -> &'static str {
     match s {
         PlanStepStatus::Pending => "pending",
         PlanStepStatus::InProgress => "in_progress",
         PlanStepStatus::Completed => "completed",
+    }
+}
+
+#[cfg(test)]
+mod mcp_instructions_tests {
+    use super::*;
+
+    #[test]
+    fn sorted_capped_and_skips_empty() {
+        assert_eq!(mcp_instructions_block(vec![]), "");
+        assert_eq!(mcp_instructions_block(vec![("a".into(), "  ".into())]), "");
+        let long = "x".repeat(MCP_INSTRUCTIONS_MAX_CHARS + 50);
+        let block = mcp_instructions_block(vec![
+            ("zeta".into(), "Use zeta for search.".into()),
+            ("alpha".into(), long),
+            ("mid".into(), "".into()),
+        ]);
+        let a = block.find("## alpha").unwrap();
+        let z = block.find("## zeta").unwrap();
+        assert!(a < z, "servers are sorted by name: {block}");
+        assert!(!block.contains("## mid"));
+        assert!(block.contains("Use zeta for search."));
+        assert!(block.contains(&format!("{} […]", "x".repeat(MCP_INSTRUCTIONS_MAX_CHARS))));
+        assert!(!block.contains(&"x".repeat(MCP_INSTRUCTIONS_MAX_CHARS + 1)));
+        // the same servers in another order give the same prompt section
+        let again = mcp_instructions_block(vec![
+            ("alpha".into(), "x".repeat(MCP_INSTRUCTIONS_MAX_CHARS + 50)),
+            ("zeta".into(), "Use zeta for search.".into()),
+        ]);
+        assert_eq!(block, again);
     }
 }

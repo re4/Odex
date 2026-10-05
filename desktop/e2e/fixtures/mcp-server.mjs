@@ -30,6 +30,7 @@ function handle(method, params) {
         protocolVersion: params?.protocolVersion ?? '2025-06-18',
         capabilities: { tools: {}, resources: {}, prompts: {} },
         serverInfo: { name: 'odex-e2e-fixture', version: '1.2.3' },
+        instructions: 'Fixture server (FIXTURE-INSTRUCTIONS-42): use echo to repeat text and add to sum two numbers.',
       }
     case 'ping':
       return {}

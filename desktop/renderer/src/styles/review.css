@@ -718,3 +718,220 @@
   align-items: center;
   gap: 2px 10px;
 }
+
+/* ------------------------------------------------------------ pull requests */
+:root {
+  --pr-open: var(--success);
+  --pr-merged: #8250df;
+  --pr-closed: var(--danger);
+}
+:root[data-theme='dark'] {
+  --pr-merged: #a371f7;
+}
+.pr-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 9px;
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex: none;
+  position: relative;
+  background: color-mix(in srgb, var(--pr-c, var(--fg-subtle)) 14%, transparent);
+  color: var(--pr-c, var(--fg-muted));
+}
+.pr-badge.s-open {
+  --pr-c: var(--pr-open);
+}
+.pr-badge.s-merged {
+  --pr-c: var(--pr-merged);
+}
+.pr-badge.s-closed {
+  --pr-c: var(--pr-closed);
+}
+.pr-badge.s-draft {
+  --pr-c: var(--fg-subtle);
+}
+.pr-badge.compact {
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10px;
+  gap: 2px;
+}
+.pr-badge.clickable {
+  cursor: pointer;
+}
+.pr-badge.clickable:hover {
+  background: color-mix(in srgb, var(--pr-c, var(--fg-subtle)) 24%, transparent);
+}
+.pr-badge-fail,
+.pr-badge-pending {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 1.5px var(--bg-elev);
+}
+.pr-badge.compact .pr-badge-fail {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+}
+.pr-badge-pending {
+  background: var(--warning);
+}
+.gp-check .gp-fix {
+  height: 20px;
+  padding: 0 6px;
+  font-size: var(--font-size-xs);
+}
+.gp-inbox-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 10px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+.gp-inbox-item:hover {
+  background: var(--bg-hover);
+}
+.gp-inbox-item .num {
+  font-family: var(--font-code);
+  font-size: var(--font-size-xs);
+  color: var(--fg-subtle);
+  flex: none;
+}
+.gp-inbox-open {
+  display: flex;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+.gp-inbox-open .input {
+  width: 110px;
+}
+.prv {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.prv-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.prv-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+.prv-title {
+  font-weight: 600;
+  font-size: var(--font-size);
+  overflow-wrap: anywhere;
+}
+.prv-files-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.prv-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prv-remote {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  margin: 4px 0;
+  font-size: var(--font-size-sm);
+  font-family: var(--font-ui);
+  white-space: normal;
+}
+.prv-remote-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 0;
+}
+.prv-remote-body {
+  padding: 2px 8px 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.prv-remote.reply {
+  margin-left: 16px;
+}
+.prv-reviewbar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.prv-reviewbar .textarea {
+  min-height: 48px;
+  font-family: var(--font-ui);
+}
+.prv-events {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.prv-events label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  color: var(--fg-muted);
+  border-left: 1px solid var(--border);
+}
+.prv-events label:first-child {
+  border-left: none;
+}
+.prv-events input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.prv-events label:has(input:checked) {
+  background: var(--bg-selected);
+  color: var(--fg);
+  font-weight: 600;
+}
+.prv-events label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.rv-detached {
+  flex-direction: column;
+  background: var(--bg);
+}

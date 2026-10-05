@@ -160,6 +160,41 @@ pub struct CompactionRecord {
     pub turn_id: Option<String>,
 }
 
+/// One decision recorded in a context summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryDecision {
+    pub decision: String,
+    pub reason: String,
+}
+
+/// One changed file recorded in a context summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SummaryFile {
+    pub path: String,
+    pub purpose: String,
+    pub state: String,
+}
+
+/// The latest compaction (handoff) summary of a thread, for the summary card.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSummary {
+    /// Summary number (1 = first compaction).
+    pub number: u32,
+    /// Whether the LLM compactor wrote it (false = extractive fallback).
+    pub llm: bool,
+    /// When the compaction happened (ms), when known.
+    #[ts(type = "number | null")]
+    pub at: Option<i64>,
+    pub goal_and_requirements: Vec<String>,
+    pub decisions: Vec<SummaryDecision>,
+    pub files_changed: Vec<SummaryFile>,
+    pub open_errors: Vec<String>,
+    pub next_steps: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextStatus {

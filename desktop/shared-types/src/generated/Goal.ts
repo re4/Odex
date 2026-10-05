@@ -2,6 +2,11 @@
 
 export type Goal = { objective: string, 
 /**
- * `active`, `done`, `blocked`, `budgetExhausted`, `cleared`.
+ * `active`, `paused`, `done`, `blocked`, `budgetExhausted`, `cleared`.
  */
-status: string, startedAt: number, timeBudgetSecs?: number | null, tokenBudget?: number | null, tokensUsed: number, turns: number, lastUpdate?: string | null, };
+status: string, 
+/**
+ * When the goal was paused (`thread/goal/pause`); paused time does not
+ * count against the time budget.
+ */
+pausedAt?: number | null, startedAt: number, timeBudgetSecs?: number | null, tokenBudget?: number | null, tokensUsed: number, turns: number, lastUpdate?: string | null, };

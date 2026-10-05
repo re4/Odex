@@ -384,6 +384,10 @@ mod tests {
             diff_stats: None,
             usage: TokenUsage::default(),
             last_error: None,
+            last_model: None,
+            model_warning: None,
+            pr: None,
+            environment_id: None,
         }
     }
 

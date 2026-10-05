@@ -56,8 +56,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   { id: 'copyThreadId', label: 'Copy thread id', group: 'Threads', keys: 'Mod+Alt+C' },
   { id: 'copyCwd', label: 'Copy working directory', group: 'Threads', keys: 'Mod+Shift+C' },
   { id: 'undo', label: 'Undo last action (archive, pin, rename)', group: 'General', keys: 'Mod+Z' },
+  { id: 'redo', label: 'Redo last undone action', group: 'General', keys: 'Mod+Shift+Z' },
+  { id: 'redo2', label: 'Redo (alt)', group: 'General', keys: 'Mod+Y' },
   { id: 'quit', label: 'Quit', group: 'General', keys: 'Mod+Q' },
   ...Array.from({ length: 9 }, (_, i) => ({ id: `goto${i + 1}`, label: `Go to thread ${i + 1}`, group: 'Navigation', keys: `Mod+${i + 1}` })),
+  // recently viewed threads (navigation history, most recent first; 1 = the one before the current)
+  ...Array.from({ length: 6 }, (_, i) => ({ id: `recent${i + 1}`, label: `Go to recent thread ${i + 1}`, group: 'Navigation', keys: `Mod+Alt+${i + 1}` })),
 ]
 
 const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform)
@@ -111,10 +115,13 @@ export function bindings(): Record<string, string> {
 }
 
 /** Commands that never fire while typing in a text field. */
-const TEXT_KEYS = new Set(['undo'])
+const TEXT_KEYS = new Set(['undo', 'redo', 'redo2'])
 
-/** Global key handler: maps key presses to command ids via `handlers`. */
-export function useShortcuts(handlers: Record<string, () => void>): void {
+/**
+ * Global key handler: maps key presses to command ids via `handlers`. A
+ * handler may return `false` to decline (the key then goes on as usual).
+ */
+export function useShortcuts(handlers: Record<string, (e?: KeyboardEvent) => unknown>): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const pressed = eventToKeys(e)
@@ -128,8 +135,10 @@ export function useShortcuts(handlers: Record<string, () => void>): void {
           if (typing && !/Mod|Alt|Ctrl/.test(pressed) && pressed !== 'Escape' && pressed !== 'F11') continue
           // text editing keeps its own undo
           if (typing && TEXT_KEYS.has(id)) continue
+          // AltGr (Ctrl+Alt on many layouts) types characters in text fields
+          if (typing && e.getModifierState?.('AltGraph')) continue
+          if (handlers[id](e) === false) continue
           e.preventDefault()
-          handlers[id]()
           return
         }
       }

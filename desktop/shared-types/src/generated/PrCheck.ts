@@ -4,4 +4,8 @@ export type PrCheck = { name: string,
 /**
  * `pending`, `success`, `failure`, `neutral`, `skipped`.
  */
-state: string, url?: string | null, };
+state: string, url?: string | null, 
+/**
+ * Check-run id (also the Actions job id), used to fetch its log.
+ */
+id?: string | null, };

@@ -154,6 +154,10 @@ pub struct OpenUrlNotification {
     pub url: String,
     /// `external` (system browser) or `inApp`.
     pub target: String,
+    /// Why it opens: `devServer` for a local URL detected in an agent's process output
+    /// (the desktop honors its "open dev server URLs" setting for these).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

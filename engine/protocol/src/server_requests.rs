@@ -91,6 +91,10 @@ pub enum ApprovalDecision {
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalResponse {
     pub decision: ApprovalDecision,
+    /// With `approveForSession` on an exec approval: also persist an allow
+    /// rule for the command prefix in `~/.odex/rules/default.toml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persist: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

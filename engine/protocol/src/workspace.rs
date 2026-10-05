@@ -15,6 +15,39 @@ pub struct ProjectAction {
     pub icon: Option<String>,
     /// URL to open in the in-app browser once running (dev servers).
     pub open_url: Option<String>,
+    /// Per-OS command lines; the one for the current OS wins over `command` when set.
+    #[serde(default)]
+    pub commands: Option<PerOs>,
+}
+
+/// A value per operating system (`windows`, `macos`, `linux`); unset entries fall back to a default.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default)]
+pub struct PerOs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub macos: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linux: Option<String>,
+}
+
+impl PerOs {
+    /// The non-blank value for the OS this binary runs on.
+    pub fn current(&self) -> Option<&str> {
+        let v = if cfg!(windows) {
+            &self.windows
+        } else if cfg!(target_os = "macos") {
+            &self.macos
+        } else {
+            &self.linux
+        };
+        v.as_deref().filter(|s| !s.trim().is_empty())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        [&self.windows, &self.macos, &self.linux].iter().all(|v| v.as_deref().unwrap_or("").trim().is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -22,9 +55,23 @@ pub struct ProjectAction {
 pub struct Environment {
     pub id: String,
     pub name: String,
-    /// Script run when a worktree is created (PowerShell on Windows, sh elsewhere).
+    /// Default script run when a worktree is created (PowerShell on Windows, sh elsewhere).
     pub setup_script: Option<String>,
+    /// Per-OS setup scripts; the one for the current OS replaces `setup_script` when set.
+    #[serde(default)]
+    pub setup_scripts: Option<PerOs>,
     pub env: std::collections::BTreeMap<String, String>,
+}
+
+impl Environment {
+    /// The setup script for the current OS (per-OS entry, else the default), if not blank.
+    pub fn effective_setup_script(&self) -> Option<&str> {
+        self.setup_scripts
+            .as_ref()
+            .and_then(|s| s.current())
+            .or(self.setup_script.as_deref())
+            .filter(|s| !s.trim().is_empty())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -201,6 +248,25 @@ pub struct PrCheck {
     /// `pending`, `success`, `failure`, `neutral`, `skipped`.
     pub state: String,
     pub url: Option<String>,
+    /// Check-run id (also the Actions job id), used to fetch its log.
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+/// One pull request in the inbox list (`pr/list`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrListItem {
+    pub number: u32,
+    pub title: String,
+    /// `open`, `draft`, `closed`, `merged`.
+    pub state: String,
+    pub author: String,
+    pub head: String,
+    pub base: String,
+    pub url: String,
+    #[ts(type = "number")]
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

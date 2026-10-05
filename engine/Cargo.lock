@@ -1545,6 +1545,7 @@ dependencies = [
 name = "odex-git"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
  "odex-protocol",
  "pretty_assertions",

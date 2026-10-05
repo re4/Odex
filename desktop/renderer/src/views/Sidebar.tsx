@@ -19,9 +19,11 @@ import {
 import type { Project, Thread } from '@shared/index'
 import { useApp } from '@/store/app'
 import * as A from '@/lib/actions'
-import { call } from '@/lib/rpc'
+import { call, toast } from '@/lib/rpc'
 import { Menu, MenuItem, relativeTime } from '@/components/ui'
 import { ProjectEditor } from '@/views/ProjectEditor'
+import { canMoveToWorktree, openMoveToWorktree } from '@/views/MoveToWorktree'
+import { PrBadge } from '@/panels/PrBadge'
 
 function StateIcon({ t }: { t: Thread }) {
   if (t.status === 'waitingApproval') return <CircleAlert size={13} color="var(--warning)" aria-label="Needs approval" />
@@ -40,6 +42,10 @@ export function threadMenu(t: Thread): MenuItem[] {
     { separator: true, label: '' },
     { label: 'Fork to new thread', onSelect: () => void A.forkThread(t.id) },
     { label: 'Fork to worktree', onSelect: () => void A.forkThread(t.id, undefined, 'worktree') },
+    ...(canMoveToWorktree(t) ? [{ label: 'Move to worktree…', onSelect: () => openMoveToWorktree(t) }] : []),
+    ...(t.worktree?.setupStatus && t.worktree.setupStatus !== 'running'
+      ? [{ label: 'Rerun setup script', onSelect: () => void call('worktree/setup', { threadId: t.id }).catch((e: Error) => toast(e.message, 'error')) }]
+      : []),
     { label: 'Open in new window', onSelect: () => void window.odex.win.newWindow(t.id) },
     { separator: true, label: '' },
     { label: 'Copy deep link', onSelect: () => A.copy(`odex://threads/${t.id}`, 'Deep link copied') },
@@ -78,6 +84,7 @@ const ThreadRow = memo(function ThreadRow({ t, active }: { t: Thread; active: bo
           <StateIcon t={t} />
         </span>
         <span className="name grow ellipsis">{title}</span>
+        {t.pr && <PrBadge pr={t.pr} compact />}
         {t.worktree && <GitBranch size={12} className="subtle" aria-label="worktree" />}
         {t.kind === 'automation' && <Clock size={12} className="subtle" aria-label="automation" />}
         <span className="when">{relativeTime(t.updatedAt)}</span>
@@ -210,7 +217,7 @@ export function Sidebar({ width }: { width: number }) {
         >
           <MessageSquarePlus size={15} /> New thread
         </button>
-        <button className="nav-item" onClick={() => void A.createThread({ kind: 'quickChat' })} title="Quick chat (Ctrl+Alt+N)">
+        <button className="nav-item" onClick={() => void window.odex.win.quickChat()} title="Quick chat (Ctrl+Alt+N)">
           <Zap size={15} /> Quick chat
         </button>
         <button className={`nav-item ${ui.view === 'search' ? 'active' : ''}`} onClick={() => setUi({ view: 'search' })}>

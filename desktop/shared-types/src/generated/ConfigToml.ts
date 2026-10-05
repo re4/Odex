@@ -5,6 +5,7 @@ import type { BrowserToml } from "./BrowserToml";
 import type { ComputerUseToml } from "./ComputerUseToml";
 import type { ContextToml } from "./ContextToml";
 import type { FeaturesToml } from "./FeaturesToml";
+import type { GitToml } from "./GitToml";
 import type { HooksToml } from "./HooksToml";
 import type { McpServerToml } from "./McpServerToml";
 import type { McpToml } from "./McpToml";
@@ -19,6 +20,7 @@ import type { ReasoningEffort } from "./ReasoningEffort";
 import type { SandboxMode } from "./SandboxMode";
 import type { SandboxToml } from "./SandboxToml";
 import type { SkillsToml } from "./SkillsToml";
+import type { WorktreesToml } from "./WorktreesToml";
 
 export type ConfigToml = { 
 /**
@@ -44,7 +46,19 @@ default_shell?: string | null,
 /**
  * Where worktrees live; default `~/.odex/worktrees`.
  */
-worktrees_dir?: string | null, roles: { [key in string]?: string }, model_providers: { [key in string]?: ModelProviderToml }, models: { [key in string]?: ModelToml }, context?: ContextToml | null, sandbox?: SandboxToml | null, mcp_servers: { [key in string]?: McpServerToml }, mcp?: McpToml | null, hooks?: HooksToml | null, computer_use?: ComputerUseToml | null, browser?: BrowserToml | null, memories?: MemoriesToml | null, notifications?: NotificationsToml | null, automatic_review?: AutomaticReviewToml | null, skills?: SkillsToml | null, features?: FeaturesToml | null, profiles: { [key in string]?: ProfileToml }, 
+worktrees_dir?: string | null, 
+/**
+ * `[worktrees]`: retention of thread worktrees.
+ */
+worktrees?: WorktreesToml | null, 
+/**
+ * Extra guidance appended to every `/review` request ("Code review" settings).
+ */
+review_instructions?: string | null, 
+/**
+ * `[git]`: branch prefix, force push, commit / PR prompt additions.
+ */
+git?: GitToml | null, roles: { [key in string]?: string }, model_providers: { [key in string]?: ModelProviderToml }, models: { [key in string]?: ModelToml }, context?: ContextToml | null, sandbox?: SandboxToml | null, mcp_servers: { [key in string]?: McpServerToml }, mcp?: McpToml | null, hooks?: HooksToml | null, computer_use?: ComputerUseToml | null, browser?: BrowserToml | null, memories?: MemoriesToml | null, notifications?: NotificationsToml | null, automatic_review?: AutomaticReviewToml | null, skills?: SkillsToml | null, features?: FeaturesToml | null, profiles: { [key in string]?: ProfileToml }, 
 /**
  * Per-folder trust: `[projects."C:\\code\\app"] trust_level = "trusted"`.
  */

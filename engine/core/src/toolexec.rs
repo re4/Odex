@@ -1,6 +1,5 @@
 //! Tool dispatch: argument hygiene, approvals, sandboxed execution, items.
 
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -308,7 +307,8 @@ fn sandbox_request(
             network: s.sandbox.network_access,
         }
     };
-    let mut env = HashMap::new();
+    // the thread's environment variables (`.odex/environments.toml`), then Odex's own
+    let mut env = crate::worktrees::thread_env_vars(engine, &t);
     env.insert("ODEX".into(), "1".into());
     env.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
     env.insert("PAGER".into(), "cat".into());
@@ -336,6 +336,33 @@ fn sandbox_available(engine: &Engine, s: &Settings) -> bool {
     .available
 }
 
+/// Is every command allowed by an `allow` rule of the user's exec policy
+/// (`~/.odex/rules/`, where "Always allow" approvals are persisted)?
+pub fn rules_allow_all(engine: &Engine, argv_list: &[Vec<String>]) -> bool {
+    let policy = engine.policy.read().unwrap();
+    !argv_list.is_empty()
+        && argv_list.iter().all(|argv| policy.evaluate_argv(argv).decision == Some(odex_execpolicy::Decision::Allow))
+}
+
+/// "Always allow": append an allow rule for `prefix` to
+/// `~/.odex/rules/default.toml` and reload the user exec policy so the next
+/// command with that prefix runs without asking.
+pub fn remember_exec_rule(engine: &Engine, prefix: &[String]) -> anyhow::Result<()> {
+    if prefix.is_empty() {
+        anyhow::bail!("no command prefix to remember");
+    }
+    if !rules_allow_all(engine, &[prefix.to_vec()]) {
+        let file = engine.home.rules_dir().join("default.toml");
+        odex_execpolicy::append_allow_rule(&file, prefix, odex_execpolicy::Decision::Allow)?;
+    }
+    let (policy, warnings) = odex_execpolicy::Policy::load(&[engine.home.rules_dir()]);
+    for w in warnings {
+        tracing::warn!("exec policy: {w}");
+    }
+    *engine.policy.write().unwrap() = policy;
+    Ok(())
+}
+
 /// Run the approval flow for an exec request. Returns Ok(sandboxed?) to run,
 /// or Err(outcome) when it must not run.
 #[allow(clippy::too_many_arguments)]
@@ -351,7 +378,9 @@ async fn approve_exec(
     let t = o.rt.thread();
     let eval = o.engine.exec_policy_eval(&t, command, shell_kind(s));
     let argv_list = eval.commands.clone().unwrap_or_default();
-    let session_allows = o.rt.session_allow.lock().unwrap().allows_command(&argv_list);
+    // persisted "Always allow" rules count like a session approval (Auto mode only)
+    let session_allows = o.rt.session_allow.lock().unwrap().allows_command(&argv_list)
+        || (t.permission_mode == PermissionMode::Auto && rules_allow_all(o.engine, &argv_list));
     let plan = approval::plan_exec(&ExecCtx {
         mode: t.permission_mode,
         eval: &eval,
@@ -650,8 +679,12 @@ async fn exec_command(o: &Out<'_>) -> ToolOutcome {
         command: command.clone(),
         argv: odex_sandbox::shell_argv(&s.default_shell, &command),
         cwd: workdir.clone(),
-        env: [("ODEX".to_string(), "1".to_string())].into_iter().collect(),
+        env: crate::worktrees::thread_env_vars(o.engine, &o.rt.thread())
+            .into_iter()
+            .chain([("ODEX".to_string(), "1".to_string())])
+            .collect(),
         sandbox: if sandboxed { Some(sandbox_request(o.engine, o.rt, &s, true, readonly)) } else { None },
+        on_url: Some(crate::sessions::dev_url_hook(o.engine.emitter())),
     };
     let session = match o.engine.sessions.start(spec).await {
         Ok(s) => s,

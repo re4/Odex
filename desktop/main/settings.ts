@@ -31,6 +31,12 @@ export const defaults: DesktopSettings = {
   showReasoning: true,
   browserHome: 'about:blank',
   zoom: 1,
+  bgColor: '',
+  fgColor: '',
+  quickChatHotkey: '',
+  quickChatOnTop: false,
+  openDevServerUrls: true,
+  projectEditors: {},
 }
 
 let cache: DesktopSettings | null = null

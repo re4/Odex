@@ -14,11 +14,13 @@ pub mod events;
 pub mod extensions;
 pub mod followups;
 pub mod hooks_rt;
+pub mod model_watch;
 pub mod plugins;
 pub mod prompt;
 pub mod rollout;
 pub mod sessions;
 pub mod skills;
+pub mod starters;
 pub mod store;
 pub mod subagents;
 pub mod summarizer;
@@ -26,6 +28,7 @@ pub mod thread;
 pub mod toolexec;
 pub mod turn;
 pub mod workspace;
+pub mod worktrees;
 
 pub use engine::{EResult, Engine, EngineError, EngineOptions};
 pub use events::{EventSink, NullSink};
@@ -42,6 +45,7 @@ impl Engine {
         let e = self.clone();
         tokio::spawn(async move {
             e.registry.refresh().await;
+            model_watch::check_all(&e);
             e.emitter().raw(
                 odex_protocol::notification::PROVIDERS_UPDATED,
                 &odex_protocol::ProvidersNotification { providers: e.registry.providers() },

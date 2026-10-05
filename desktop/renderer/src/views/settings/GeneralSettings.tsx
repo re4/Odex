@@ -1,11 +1,81 @@
 import type { ReactNode } from 'react'
+import { RotateCcw } from 'lucide-react'
 import type { DesktopSettings } from '@shared/index'
 import { useApp } from '@/store/app'
 import { Toggle } from '@/components/ui'
+import { useEngineConfig } from '@/views/settings/ConfigSettings'
+
+const AGENT_SHELLS: Array<[string, string]> =
+  typeof window !== 'undefined' && window.odex?.platform === 'win32'
+    ? [
+        ['powershell', 'Windows PowerShell'],
+        ['pwsh', 'PowerShell 7'],
+        ['cmd', 'Command Prompt'],
+        ['git-bash', 'Git Bash'],
+      ]
+    : [
+        ['bash', 'bash'],
+        ['zsh', 'zsh'],
+        ['sh', 'sh'],
+      ]
+
+/** A color override: picker + reset to the theme color. */
+function ColorOverride({ value, onChange, label, fallbackVar }: { value: string; onChange: (v: string) => void; label: string; fallbackVar: string }) {
+  const shown = value || getComputedStyle(document.documentElement).getPropertyValue(fallbackVar).trim() || '#000000'
+  return (
+    <div className="row" style={{ gap: 6 }}>
+      <input type="color" value={/^#[0-9a-f]{6}$/i.test(shown) ? shown : '#000000'} onChange={(e) => onChange(e.target.value)} aria-label={label} style={{ width: 34, height: 24, border: 'none', background: 'none' }} />
+      <span className="xs subtle mono" style={{ minWidth: 64 }}>
+        {value || 'theme'}
+      </span>
+      <button className="icon-btn sm" aria-label={`Reset ${label.toLowerCase()}`} title="Use the theme color" disabled={!value} onClick={() => onChange('')}>
+        <RotateCcw size={12} />
+      </button>
+    </div>
+  )
+}
+
+/** Engine settings shown in General (agent shell, follow-up suggestions). */
+function AgentRows() {
+  const { cfg, write } = useEngineConfig()
+  if (!cfg) return null
+  const shell = cfg.user.default_shell ?? ''
+  const known = AGENT_SHELLS.some(([v]) => v === shell)
+  const followUps = cfg.user.features?.follow_up_suggestions ?? cfg.effective.features?.follow_up_suggestions ?? true
+  return (
+    <>
+      <Row label="Agent shell" hint="Shell the agent runs commands in (default_shell in config.toml)">
+        <select
+          className="select"
+          aria-label="Agent shell"
+          style={{ minWidth: 160 }}
+          value={shell}
+          onChange={(e) => void write([{ keyPath: 'default_shell', value: e.target.value || null }])}
+        >
+          <option value="">Default{cfg.effective.default_shell && !cfg.user.default_shell ? ` (${cfg.effective.default_shell})` : ''}</option>
+          {AGENT_SHELLS.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+          {!known && shell && <option value={shell}>{shell}</option>}
+        </select>
+      </Row>
+      <Row label="Suggest follow-ups" hint="After a turn, the utility model suggests a few follow-up prompts">
+        <Toggle checked={followUps} onChange={(v) => void write([{ keyPath: 'features.follow_up_suggestions', value: v }])} label="Suggest follow-ups" />
+      </Row>
+    </>
+  )
+}
 
 export function Row({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="row" style={{ padding: '10px 0', borderBottom: '1px solid var(--border)', alignItems: 'center', gap: 16 }}>
+    <div
+      className="row"
+      data-setting-label={label}
+      data-setting-hint={typeof hint === 'string' ? hint : undefined}
+      style={{ padding: '10px 0', borderBottom: '1px solid var(--border)', alignItems: 'center', gap: 16 }}
+    >
       <div className="grow" style={{ minWidth: 0 }}>
         <div>{label}</div>
         {hint && <div className="xs subtle">{hint}</div>}
@@ -53,6 +123,12 @@ export function GeneralSettings() {
           <input type="color" value={s.accent} onChange={(e) => set({ accent: e.target.value })} aria-label="Custom accent" style={{ width: 28, height: 22, border: 'none', background: 'none' }} />
         </div>
       </Row>
+      <Row label="Background color" hint="Overrides the theme's main background">
+        <ColorOverride label="Background color" value={s.bgColor ?? ''} fallbackVar="--bg" onChange={(v) => set({ bgColor: v })} />
+      </Row>
+      <Row label="Text color" hint="Overrides the theme's main text (foreground) color">
+        <ColorOverride label="Text color" value={s.fgColor ?? ''} fallbackVar="--fg" onChange={(v) => set({ fgColor: v })} />
+      </Row>
       <Row label="Density">
         <Select label="Density" value={s.density} options={[['comfortable', 'Comfortable'], ['compact', 'Compact']]} onChange={(v) => set({ density: v })} />
       </Row>
@@ -83,6 +159,11 @@ export function GeneralSettings() {
       </Row>
 
       <h3 className="section-title" style={{ marginTop: 20 }}>
+        Agent
+      </h3>
+      <AgentRows />
+
+      <h3 className="section-title" style={{ marginTop: 20 }}>
         Terminal & editor
       </h3>
       <Row label="Terminal location">
@@ -100,8 +181,11 @@ export function GeneralSettings() {
           onChange={(v) => set({ defaultTerminalShell: v })}
         />
       </Row>
-      <Row label="Open files in" hint="Editor for “Open in editor” (a command; {file} and {line} are replaced)">
+      <Row label="Open files in" hint="Editor command for “Open in editor”: {file} and {line} are replaced (paths are quoted for you), e.g. vim +{line} {file}. Without {file}, code and cursor open file:line. “system” uses the default app. Projects can override it under Edit project → General.">
         <input className="input" value={s.editor} onChange={(e) => set({ editor: e.target.value })} placeholder="code -g {file}:{line}" style={{ width: 280 }} aria-label="Editor command" />
+      </Row>
+      <Row label="Open dev server URLs in the browser panel" hint="When an agent process or a project action prints a local URL (localhost, 127.0.0.1, 0.0.0.0 with a port), open it in the in-app browser">
+        <Toggle checked={s.openDevServerUrls ?? true} onChange={(v) => set({ openDevServerUrls: v })} label="Open dev server URLs in the browser panel" />
       </Row>
 
       <h3 className="section-title" style={{ marginTop: 20 }}>
@@ -128,6 +212,9 @@ export function GeneralSettings() {
       </Row>
       <Row label="Appshot hotkey" hint="Capture the frontmost window into the composer">
         <input className="input mono" value={s.appshotHotkey} onChange={(e) => set({ appshotHotkey: e.target.value })} style={{ width: 200 }} aria-label="Appshot hotkey" />
+      </Row>
+      <Row label="Quick chat hotkey" hint="System-wide shortcut that opens the Quick Chat window (e.g. Control+Alt+Space); empty = off. Inside Odex, Ctrl+Alt+N opens it.">
+        <input className="input mono" value={s.quickChatHotkey ?? ''} placeholder="Off" onChange={(e) => set({ quickChatHotkey: e.target.value })} style={{ width: 200 }} aria-label="Quick chat hotkey" />
       </Row>
       <Row label="Run setup again">
         <button className="btn btn-sm" onClick={() => useApp.getState().setUi({ onboardingOpen: true })}>

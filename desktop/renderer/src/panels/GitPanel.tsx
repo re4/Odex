@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   ArrowDown,
+  ArrowLeft,
   ArrowRightLeft,
   ArrowUp,
   Check,
@@ -8,28 +9,54 @@ import {
   ChevronRight,
   CircleDot,
   CircleX,
+  Columns2,
   ExternalLink,
+  FileText,
   FolderOpen,
   GitBranch,
   GitCommitHorizontal,
+  GitMerge,
   GitPullRequest,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  Inbox,
+  MessageSquare,
   Minus,
   Plus,
   RefreshCw,
+  Rows3,
+  Send,
   Sparkles,
   Trash2,
   Undo2,
   Upload,
+  Wrench,
 } from 'lucide-react'
-import type { DiffTarget, GitBranch as Branch, GitCommitInfo, GitFileStatus, GitStatus, HandoffResult, HandoffStrategy, PullRequest, WorktreeInfo } from '@shared/index'
+import type {
+  DiffFile,
+  DiffTarget,
+  GitBranch as Branch,
+  GitCommitInfo,
+  GitFileStatus,
+  GitStatus,
+  HandoffResult,
+  HandoffStrategy,
+  PrCheck,
+  PrListItem,
+  PrReviewComment,
+  PullRequest,
+  ReviewComment,
+  WorktreeInfo,
+} from '@shared/index'
 import { useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
-import { confirmDialog } from '@/lib/actions'
-import { Modal, Toggle, basename, relativeTime } from '@/components/ui'
+import { confirmDialog, openSettings, sendMessage } from '@/lib/actions'
+import { Modal, Toggle, relativeTime } from '@/components/ui'
 import { Markdown } from '@/components/Markdown'
-import { StatusBadge, splitPath } from '@/components/DiffView'
+import { DiffView, StatusBadge, anchorKey, splitPath, type LineAnchor, type LineSelection } from '@/components/DiffView'
 import { openFileInPanel } from '@/views/items'
-import { friendlyGitError, isGhSetupError, joinPath, showInReview, useRepoContext } from '@/panels/gitShared'
+import { CommentComposer, PendingCard } from '@/panels/ReviewPanel'
+import { PR_STATE_CLASS, firstChangedLine, fixCheckMessage, friendlyGitError, isGhSetupError, joinPath, normPath, showInReview, useRepoContext } from '@/panels/gitShared'
 import '@/styles/review.css'
 
 function errMsg(e: unknown): string {
@@ -59,6 +86,8 @@ export function GitPanel() {
   const [busy, setBusy] = useState(false)
   const [pushOpen, setPushOpen] = useState(false)
   const [handoffOpen, setHandoffOpen] = useState(false)
+  // a pull request opened full-panel (files, review comments, submit review)
+  const [prNumber, setPrNumber] = useState<number | null>(null)
 
   const seq = useRef(0)
   const load = useCallback(async () => {
@@ -83,6 +112,7 @@ export function GitPanel() {
     setShownRoot(root)
     setStatus(null)
     setLog([])
+    setPrNumber(null)
   }
   useEffect(() => {
     void load()
@@ -158,6 +188,9 @@ export function GitPanel() {
   }
 
   const repoRoot = status.repoRoot ?? root
+  if (prNumber != null) {
+    return <PrView root={repoRoot} threadId={threadId} number={prNumber} branch={status.branch ?? null} onBack={() => setPrNumber(null)} />
+  }
   const staged = status.files.filter((f) => f.staged && !f.untracked)
   const unstaged = status.files.filter((f) => f.unstaged && !f.untracked && !f.conflicted)
   const untracked = status.files.filter((f) => f.untracked)
@@ -330,7 +363,9 @@ export function GitPanel() {
 
       <LogCard log={log} />
 
-      <PrCard root={repoRoot} threadId={threadId} status={status} onPush={() => setPushOpen(true)} />
+      <PrCard root={repoRoot} threadId={threadId} status={status} onPush={() => setPushOpen(true)} onOpen={setPrNumber} />
+
+      {status.remoteUrl && <PrInbox root={repoRoot} current={status.branch ?? null} onOpen={setPrNumber} />}
 
       {pushOpen && <PushDialog root={repoRoot} status={status} onClose={() => setPushOpen(false)} onDone={() => void load()} />}
       {handoffOpen && threadId && thread?.worktree && <HandoffDialog threadId={threadId} wt={thread.worktree} dirty={status.files.length > 0} onClose={() => setHandoffOpen(false)} onDone={() => void load()} />}
@@ -551,12 +586,19 @@ function PushDialog({ root, status, onClose, onDone }: { root: string; status: G
   const [remote, setRemote] = useState('origin')
   const [setUpstream, setSetUpstream] = useState(!status.upstream)
   const [force, setForce] = useState(false)
+  // Settings → Git → Allow force push (the engine refuses force pushes without it)
+  const [allowForce, setAllowForce] = useState(false)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; output: string } | null>(null)
+  useEffect(() => {
+    void call('config/read', {})
+      .then((c) => setAllowForce(!!c.effective.git?.allow_force_push))
+      .catch(() => {})
+  }, [])
   const push = async () => {
     setBusy(true)
     try {
-      const r = await call('git/push', { cwd: root, remote: remote.trim() || null, branch: status.branch ?? null, setUpstream, forceWithLease: force })
+      const r = await call('git/push', { cwd: root, remote: remote.trim() || null, branch: status.branch ?? null, setUpstream, forceWithLease: force && allowForce })
       if (r.ok) {
         toast(`Pushed ${status.branch} to ${remote}`, 'success')
         onDone()
@@ -577,9 +619,9 @@ function PushDialog({ root, status, onClose, onDone }: { root: string; status: G
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
-          <button className={`btn ${force ? 'btn-danger' : 'btn-primary'}`} disabled={busy || !remote.trim()} onClick={() => void push()}>
+          <button className={`btn ${force && allowForce ? 'btn-danger' : 'btn-primary'}`} disabled={busy || !remote.trim()} onClick={() => void push()}>
             {busy && <span className="spinner" style={{ width: 11, height: 11 }} />}
-            {force ? 'Force push' : 'Push'}
+            {force && allowForce ? 'Force push' : 'Push'}
           </button>
         </>
       }
@@ -597,11 +639,26 @@ function PushDialog({ root, status, onClose, onDone }: { root: string; status: G
           <input type="checkbox" checked={setUpstream} onChange={(e) => setSetUpstream(e.target.checked)} />
           Set upstream (track {remote || 'origin'}/{status.branch})
         </label>
-        <label className="checkbox small">
-          <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
+        <label className="checkbox small" title={allowForce ? undefined : 'Turn on “Allow force push” in Settings → Git'}>
+          <input type="checkbox" checked={force && allowForce} disabled={!allowForce} onChange={(e) => setForce(e.target.checked)} />
           Force with lease
         </label>
-        {force && <div className="gp-note warn">Force-with-lease overwrites the remote branch if nobody else pushed since your last fetch. Use it after rebasing or amending.</div>}
+        {!allowForce && (
+          <div className="xs subtle">
+            Force pushes are off.{' '}
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault()
+                onClose()
+                openSettings('git')
+              }}
+            >
+              Settings → Git
+            </a>
+          </div>
+        )}
+        {force && allowForce && <div className="gp-note warn">Force-with-lease overwrites the remote branch if nobody else pushed since your last fetch. Use it after rebasing or amending.</div>}
         {result && !result.ok && (
           <>
             <div className="gp-note error">{friendlyGitError(result.output)}</div>
@@ -758,9 +815,71 @@ function CheckIcon({ state }: { state: string }) {
   return <Minus size={13} color="var(--fg-subtle)" aria-label={state} />
 }
 
-const PR_STATE_BADGE: Record<string, string> = { open: 'success', draft: '', merged: 'accent', closed: 'danger' }
+function PrStateIcon({ state }: { state: string }) {
+  const color = state === 'merged' ? 'var(--pr-merged)' : state === 'closed' ? 'var(--danger)' : state === 'draft' ? 'var(--fg-subtle)' : 'var(--success)'
+  if (state === 'merged') return <GitMerge size={14} color={color} aria-label="merged" />
+  if (state === 'closed') return <GitPullRequestClosed size={14} color={color} aria-label="closed" />
+  if (state === 'draft') return <GitPullRequestDraft size={14} color={color} aria-label="draft" />
+  return <GitPullRequest size={14} color={color} aria-label="open" />
+}
 
-function PrCard({ root, threadId, status, onPush }: { root: string; threadId: string | null; status: GitStatus; onPush: () => void }) {
+function checkCounts(checks: PrCheck[]): string {
+  const passed = checks.filter((c) => c.state === 'success').length
+  const failed = checks.filter((c) => c.state === 'failure').length
+  const pending = checks.filter((c) => c.state === 'pending').length
+  return `Checks: ${passed} passed${failed ? `, ${failed} failed` : ''}${pending ? `, ${pending} pending` : ''}`
+}
+
+/** CI checks of a PR; a failing check offers "Fix": its log goes to the thread's agent. */
+function ChecksList({ pr, root, threadId }: { pr: PullRequest; root: string; threadId: string | null }) {
+  const [fixing, setFixing] = useState<string | null>(null)
+  if (!pr.checks.length) return null
+  const fix = async (c: PrCheck) => {
+    if (!threadId) return
+    setFixing(c.name)
+    try {
+      const r = await call('pr/checkLog', { cwd: root, name: c.name, checkId: c.id ?? null, url: c.url ?? null })
+      await sendMessage(threadId, [{ type: 'text', text: fixCheckMessage(c.name, { number: pr.number, title: pr.title, head: pr.head }, r.text, r.truncated) }])
+      toast(`Sent the “${c.name}” failure to the agent`, 'success')
+    } catch (e) {
+      toast(friendlyGitError(errMsg(e)), 'error')
+    } finally {
+      setFixing(null)
+    }
+  }
+  return (
+    <div role="list" aria-label="Checks">
+      <div className="xs subtle" style={{ marginBottom: 2 }}>
+        {checkCounts(pr.checks)}
+      </div>
+      {pr.checks.map((c, i) => (
+        <div key={`${c.name}-${i}`} className="gp-check" role="listitem">
+          <CheckIcon state={c.state} />
+          <span className="ellipsis grow">{c.name}</span>
+          {c.state === 'failure' && (
+            <button
+              className="btn btn-sm gp-fix"
+              disabled={!threadId || fixing != null}
+              title={threadId ? 'Send this check’s log to the agent and ask it to fix the failure' : 'Open a thread to ask the agent for a fix'}
+              aria-label={`Fix ${c.name}`}
+              onClick={() => void fix(c)}
+            >
+              {fixing === c.name ? <span className="spinner" style={{ width: 10, height: 10 }} /> : <Wrench size={11} />} Fix
+            </button>
+          )}
+          {c.url && (
+            <button className="icon-btn sm" aria-label={`Open check ${c.name}`} onClick={() => void window.odex.shell.openExternal(c.url!)}>
+              <ExternalLink size={11} />
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** The pull request of the current branch: summary, checks, open for review, or draft a new one. */
+function PrCard({ root, threadId, status, onPush, onOpen }: { root: string; threadId: string | null; status: GitStatus; onPush: () => void; onOpen: (n: number) => void }) {
   const [loading, setLoading] = useState(false)
   const [pr, setPr] = useState<PullRequest | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -768,8 +887,6 @@ function PrCard({ root, threadId, status, onPush }: { root: string; threadId: st
   const [draft, setDraft] = useState<{ title: string; body: string; base: string; draft: boolean } | null>(null)
   const [drafting, setDrafting] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [comment, setComment] = useState('')
-  const [posting, setPosting] = useState(false)
   const [showDetails, setShowDetails] = useState(false)
   const hasRemote = !!status.remoteUrl
 
@@ -777,7 +894,7 @@ function PrCard({ root, threadId, status, onPush }: { root: string; threadId: st
     if (!hasRemote) return
     setLoading(true)
     try {
-      const r = await call('pr/view', { cwd: root })
+      const r = await call('pr/view', { cwd: root, threadId })
       setPr(r.pr ?? null)
       setError(r.error ?? null)
     } catch (e) {
@@ -786,7 +903,7 @@ function PrCard({ root, threadId, status, onPush }: { root: string; threadId: st
       setLoading(false)
       setChecked(true)
     }
-  }, [root, hasRemote])
+  }, [root, hasRemote, threadId])
 
   useEffect(() => {
     setPr(null)
@@ -813,7 +930,7 @@ function PrCard({ root, threadId, status, onPush }: { root: string; threadId: st
     if (!draft) return
     setCreating(true)
     try {
-      const r = await call('pr/create', { cwd: root, title: draft.title.trim(), body: draft.body, base: draft.base.trim() || null, draft: draft.draft })
+      const r = await call('pr/create', { cwd: root, title: draft.title.trim(), body: draft.body, base: draft.base.trim() || null, draft: draft.draft, threadId })
       toast(`Pull request created${r.number ? ` (#${r.number})` : ''}`, 'success')
       setDraft(null)
       void load()
@@ -824,30 +941,8 @@ function PrCard({ root, threadId, status, onPush }: { root: string; threadId: st
     }
   }
 
-  const post = async () => {
-    if (!pr || !comment.trim()) return
-    if (!(await confirmDialog('Post comment', `Post this comment to pull request #${pr.number} on GitHub? Everyone with access to the repository will see it.`, 'Post comment'))) return
-    setPosting(true)
-    try {
-      const r = await call('pr/comment', { cwd: root, number: pr.number, comments: [], body: comment.trim(), confirmed: true })
-      if (r.ok) {
-        toast('Comment posted', 'success')
-        setComment('')
-        void load()
-      } else toast(friendlyGitError(r.output), 'error')
-    } catch (e) {
-      toast(friendlyGitError(errMsg(e)), 'error')
-    } finally {
-      setPosting(false)
-    }
-  }
-
-  const passed = pr?.checks.filter((c) => c.state === 'success').length ?? 0
-  const failed = pr?.checks.filter((c) => c.state === 'failure').length ?? 0
-  const pendingChecks = pr?.checks.filter((c) => c.state === 'pending').length ?? 0
-
   return (
-    <div className="gp-card">
+    <div className="gp-card" aria-label="Pull request">
       <div className="gp-card-head">
         <GitPullRequest size={14} />
         <b className="small grow">Pull request</b>
@@ -863,11 +958,18 @@ function PrCard({ root, threadId, status, onPush }: { root: string; threadId: st
         ) : error ? (
           <>
             <div className={`gp-note ${isGhSetupError(error) ? 'warn' : 'error'}`}>{friendlyGitError(error)}</div>
-            {friendlyGitError(error) !== error && (
-              <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setShowDetails(!showDetails)}>
-                {showDetails ? 'Hide details' : 'Details'}
-              </button>
-            )}
+            <div className="row" style={{ gap: 6 }}>
+              {friendlyGitError(error) !== error && (
+                <button className="btn btn-sm btn-ghost" onClick={() => setShowDetails(!showDetails)}>
+                  {showDetails ? 'Hide details' : 'Details'}
+                </button>
+              )}
+              {isGhSetupError(error) && (
+                <button className="btn btn-sm btn-ghost" onClick={() => openSettings('git')}>
+                  GitHub settings
+                </button>
+              )}
+            </div>
             {showDetails && <pre className="gp-out">{error}</pre>}
           </>
         ) : !checked && loading ? (
@@ -877,7 +979,7 @@ function PrCard({ root, threadId, status, onPush }: { root: string; threadId: st
         ) : pr ? (
           <>
             <div className="row" style={{ gap: 6, alignItems: 'flex-start' }}>
-              <span className={`badge ${PR_STATE_BADGE[pr.state] ?? ''}`}>{pr.state}</span>
+              <span className={`badge ${PR_STATE_CLASS[pr.state] ?? ''}`}>{pr.state}</span>
               <a
                 href="#"
                 className="small grow"
@@ -890,92 +992,20 @@ function PrCard({ root, threadId, status, onPush }: { root: string; threadId: st
                 #{pr.number} {pr.title} <ExternalLink size={11} />
               </a>
             </div>
-            <div className="xs subtle row" style={{ gap: 6 }}>
+            <div className="xs subtle row" style={{ gap: 6, flexWrap: 'wrap' }}>
               <span className="mono">{pr.head}</span> → <span className="mono">{pr.base}</span>
               <span>· {pr.author}</span>
               <span className="text-add">+{pr.additions}</span>
               <span className="text-del">-{pr.deletions}</span>
             </div>
-            {pr.checks.length > 0 && (
-              <div>
-                <div className="xs subtle" style={{ marginBottom: 2 }}>
-                  Checks: {passed} passed{failed ? `, ${failed} failed` : ''}
-                  {pendingChecks ? `, ${pendingChecks} pending` : ''}
-                </div>
-                {pr.checks.map((c, i) => (
-                  <div key={i} className="gp-check">
-                    <CheckIcon state={c.state} />
-                    <span className="ellipsis grow">{c.name}</span>
-                    {c.url && (
-                      <button className="icon-btn sm" aria-label={`Open check ${c.name}`} onClick={() => void window.odex.shell.openExternal(c.url!)}>
-                        <ExternalLink size={11} />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-            {pr.body && (
-              <details>
-                <summary className="xs subtle" style={{ cursor: 'pointer' }}>
-                  Description
-                </summary>
-                <div className="small">
-                  <Markdown text={pr.body} />
-                </div>
-              </details>
-            )}
-            {pr.reviewComments.length > 0 && (
-              <div>
-                <div className="xs subtle" style={{ marginBottom: 4 }}>
-                  {pr.reviewComments.length} review comment(s)
-                </div>
-                <div className="gp-timeline">
-                  {pr.reviewComments.slice(0, 20).map((c) => (
-                    <div key={c.id} className="gp-event">
-                      <div className="row xs" style={{ gap: 6 }}>
-                        <b>{c.author}</b>
-                        <a href="#" className="mono ellipsis" onClick={(e) => (e.preventDefault(), openFileInPanel(joinPath(root, c.path), c.line ?? undefined))}>
-                          {basename(c.path)}
-                          {c.line ? `:${c.line}` : ''}
-                        </a>
-                        <span className="spacer" />
-                        <span className="subtle">{c.at ? relativeTime(c.at) : ''}</span>
-                      </div>
-                      <div className="body">{c.body}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            {pr.timeline.length > 0 && (
-              <div>
-                <div className="xs subtle" style={{ marginBottom: 4 }}>
-                  Activity
-                </div>
-                <div className="gp-timeline">
-                  {[...pr.timeline]
-                    .sort((a, b) => b.at - a.at)
-                    .slice(0, 15)
-                    .map((ev, i) => (
-                      <div key={i} className="gp-event">
-                        <div className="row xs" style={{ gap: 6 }}>
-                          <b>{ev.author ?? 'someone'}</b>
-                          <span className="subtle">{ev.kind}</span>
-                          <span className="spacer" />
-                          <span className="subtle">{ev.at ? relativeTime(ev.at) : ''}</span>
-                        </div>
-                        {ev.body && <div className="body">{ev.body}</div>}
-                      </div>
-                    ))}
-                </div>
-              </div>
-            )}
-            <div className="col" style={{ gap: 6 }}>
-              <textarea className="textarea" style={{ minHeight: 56 }} aria-label="Pull request comment" placeholder="Comment on this pull request" value={comment} onChange={(e) => setComment(e.target.value)} />
-              <button className="btn btn-sm" style={{ alignSelf: 'flex-end' }} disabled={!comment.trim() || posting} onClick={() => void post()}>
-                {posting && <span className="spinner" style={{ width: 11, height: 11 }} />}
-                Comment
+            <ChecksList pr={pr} root={root} threadId={threadId} />
+            <div className="row" style={{ gap: 6 }}>
+              <span className="xs subtle grow">
+                {pr.files.length} file{pr.files.length === 1 ? '' : 's'}
+                {pr.reviewComments.length ? ` · ${pr.reviewComments.length} review comment${pr.reviewComments.length === 1 ? '' : 's'}` : ''}
+              </span>
+              <button className="btn btn-sm" onClick={() => onOpen(pr.number)}>
+                <FileText size={12} /> Files & review
               </button>
             </div>
           </>
@@ -1024,6 +1054,421 @@ function PrCard({ root, threadId, status, onPush }: { root: string; threadId: st
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/** Open pull requests of the repository (the inbox); click one to view and review it. */
+function PrInbox({ root, current, onOpen }: { root: string; current: string | null; onOpen: (n: number) => void }) {
+  const [items, setItems] = useState<PrListItem[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [num, setNum] = useState('')
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await call('pr/list', { cwd: root })
+      setItems(r.prs)
+      setError(r.error ?? null)
+    } catch (e) {
+      setError(errMsg(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [root])
+  useEffect(() => {
+    void load()
+  }, [load])
+  const n = Number(num.replace(/^#/, ''))
+  const valid = Number.isInteger(n) && n > 0
+  return (
+    <div className="gp-card" aria-label="Pull requests">
+      <div className="gp-card-head">
+        <Inbox size={14} />
+        <b className="small grow">Pull requests</b>
+        {items && items.length > 0 && <span className="badge">{items.length} open</span>}
+        <button className="icon-btn sm" title="Refresh pull requests" aria-label="Refresh pull requests" onClick={() => void load()}>
+          {loading ? <span className="spinner" style={{ width: 11, height: 11 }} /> : <RefreshCw size={13} />}
+        </button>
+      </div>
+      {error ? (
+        <div className="gp-card-body">
+          <div className={`gp-note ${isGhSetupError(error) ? 'warn' : 'error'}`}>{friendlyGitError(error)}</div>
+        </div>
+      ) : items == null ? (
+        <div className="gp-card-body xs subtle">{loading ? 'Loading…' : ''}</div>
+      ) : items.length === 0 ? (
+        <div className="gp-card-body xs subtle">No open pull requests.</div>
+      ) : (
+        <div role="list" style={{ maxHeight: 280, overflowY: 'auto' }}>
+          {items.map((p) => (
+            <button key={p.number} role="listitem" className="gp-inbox-item" title={`${p.title}\n${p.head} → ${p.base} · ${p.author}`} onClick={() => onOpen(p.number)}>
+              <PrStateIcon state={p.state} />
+              <span className="num">#{p.number}</span>
+              <span className="ellipsis grow">{p.title}</span>
+              {current && p.head === current && <span className="badge accent">this branch</span>}
+              <span className="xs subtle" style={{ flex: 'none' }}>
+                {p.author}
+                {p.updatedAt ? ` · ${relativeTime(p.updatedAt)}` : ''}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      <form
+        className="gp-inbox-open"
+        style={{ paddingTop: items && items.length > 0 && !error ? 8 : 0 }}
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (valid) {
+            onOpen(n)
+            setNum('')
+          }
+        }}
+      >
+        <input className="input" aria-label="Pull request number" placeholder="PR number" inputMode="numeric" value={num} onChange={(e) => setNum(e.target.value)} />
+        <button type="submit" className="btn btn-sm" disabled={!valid}>
+          Review PR
+        </button>
+      </form>
+    </div>
+  )
+}
+
+// --------------------------------------------------------------------- PR view
+
+const EVENTS: Array<{ id: 'comment' | 'approve' | 'requestChanges'; label: string }> = [
+  { id: 'comment', label: 'Comment' },
+  { id: 'approve', label: 'Approve' },
+  { id: 'requestChanges', label: 'Request changes' },
+]
+
+/** Draft review comments per PR (`root#number`), kept while the panel switches views. */
+const prDrafts = new Map<string, ReviewComment[]>()
+
+interface PrComposer {
+  path: string
+  file: DiffFile
+  side: 'old' | 'new'
+  anchor: number
+  start: number
+  end: number
+}
+
+function snippet(f: DiffFile, side: 'old' | 'new', start: number, end: number): string {
+  const out: string[] = []
+  for (const h of f.hunks)
+    for (const l of h.lines) {
+      const n = side === 'old' ? (l.kind === 'add' ? null : l.oldNo) : l.kind === 'del' ? null : l.newNo
+      if (n != null && n >= start && n <= end) out.push(`${l.kind === 'add' ? '+' : l.kind === 'del' ? '-' : ' '}${l.text.replace(/\r$/, '')}`)
+    }
+  return out.slice(0, 40).join('\n')
+}
+
+function RemoteComment({ c, reply }: { c: PrReviewComment; reply?: boolean }) {
+  return (
+    <div className={`prv-remote ${reply ? 'reply' : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div className="prv-remote-head xs">
+        <MessageSquare size={11} className="subtle" />
+        <b>{c.author}</b>
+        <span className="spacer" />
+        <span className="subtle">{c.at ? relativeTime(c.at) : ''}</span>
+      </div>
+      <div className="prv-remote-body">{c.body}</div>
+    </div>
+  )
+}
+
+/**
+ * One pull request, full panel: summary, checks (with Fix), description, activity, the diff with
+ * existing review comments on their lines, and a review you write inline and submit as
+ * Comment / Approve / Request changes (after confirmation).
+ */
+function PrView({ root, threadId, number, branch, onBack }: { root: string; threadId: string | null; number: number; branch: string | null; onBack: () => void }) {
+  const [pr, setPr] = useState<PullRequest | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const key = `${normPath(root)}#${number}`
+  const [drafts, setDraftsState] = useState<ReviewComment[]>(() => prDrafts.get(key) ?? [])
+  const setDrafts = (list: ReviewComment[]) => {
+    prDrafts.set(key, list)
+    setDraftsState(list)
+  }
+  const [composer, setComposer] = useState<PrComposer | null>(null)
+  const draftRef = useRef('')
+  const [body, setBody] = useState('')
+  const [event, setEvent] = useState<'comment' | 'approve' | 'requestChanges'>('comment')
+  const [submitting, setSubmitting] = useState(false)
+  const [mode, setMode] = useState<'unified' | 'split'>('unified')
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await call('pr/view', { cwd: root, number, threadId })
+      setPr(r.pr ?? null)
+      setError(r.error ?? (r.pr ? null : `Pull request #${number} was not found in this repository.`))
+    } catch (e) {
+      setError(errMsg(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [root, number, threadId])
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const onLineClick = (f: DiffFile, _key: string, a: LineAnchor, e: React.MouseEvent) => {
+    if (e.shiftKey && composer && composer.path === f.path && composer.side === a.side) {
+      setComposer({ ...composer, start: Math.min(composer.anchor, a.line), end: Math.max(composer.anchor, a.line) })
+      return
+    }
+    if (!composer) draftRef.current = ''
+    setComposer({ path: f.path, file: f, side: a.side, anchor: a.line, start: a.line, end: a.line })
+  }
+
+  const addDraft = (text: string) => {
+    if (!composer || !text.trim()) return
+    setDrafts([
+      ...drafts,
+      {
+        path: composer.path,
+        line: composer.start,
+        endLine: composer.end !== composer.start ? composer.end : null,
+        side: composer.side,
+        body: text.trim(),
+        snippet: snippet(composer.file, composer.side, composer.start, composer.end) || null,
+      },
+    ])
+    setComposer(null)
+    draftRef.current = ''
+  }
+
+  const annotations = useMemo(() => {
+    const out: Record<string, Map<string, ReactNode[]>> = {}
+    const put = (path: string, a: string, node: ReactNode) => {
+      const m = (out[path] ??= new Map())
+      m.set(a, [...(m.get(a) ?? []), node])
+    }
+    if (pr) {
+      const replies = new Map<string, PrReviewComment[]>()
+      for (const c of pr.reviewComments) if (c.inReplyTo) replies.set(c.inReplyTo, [...(replies.get(c.inReplyTo) ?? []), c])
+      for (const c of pr.reviewComments) {
+        if (c.inReplyTo || c.line == null) continue
+        const side = c.side?.toUpperCase() === 'LEFT' ? 'old' : 'new'
+        put(
+          c.path,
+          anchorKey(side, c.line),
+          <div key={`r${c.id}`} className="prv-thread">
+            <RemoteComment c={c} />
+            {(replies.get(c.id) ?? []).map((r) => (
+              <RemoteComment key={r.id} c={r} reply />
+            ))}
+          </div>,
+        )
+      }
+    }
+    drafts.forEach((c, i) => {
+      if (c.line == null) return
+      put(
+        c.path,
+        anchorKey(c.side === 'old' ? 'old' : 'new', c.endLine ?? c.line),
+        <PendingCard key={`d${i}`} comment={c} onDelete={() => setDrafts(drafts.filter((_, k) => k !== i))} onEdit={(text) => setDrafts(drafts.map((d, k) => (k === i ? { ...d, body: text } : d)))} />,
+      )
+    })
+    if (composer) {
+      put(
+        composer.path,
+        anchorKey(composer.side, composer.end),
+        <CommentComposer
+          key="composer"
+          label={`Review comment on ${composer.side === 'old' ? 'old ' : ''}line${composer.end !== composer.start ? `s ${composer.start}–${composer.end}` : ` ${composer.start} · Shift+click another line to select a range`}`}
+          placeholder="Comment for the pull request… (Ctrl+Enter to add)"
+          draftRef={draftRef}
+          onSubmit={addDraft}
+          onCancel={() => setComposer(null)}
+        />,
+      )
+    }
+    const res: Record<string, Map<string, ReactNode>> = {}
+    for (const [k, m] of Object.entries(out)) res[k] = new Map([...m].map(([a, nodes]) => [a, <>{nodes}</>]))
+    return res
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pr, drafts, composer])
+
+  const selection: LineSelection | null = composer ? { fileKey: composer.path, side: composer.side, start: composer.start, end: composer.end } : null
+  const canSubmit = !!pr && !submitting && (event === 'approve' || !!body.trim() || drafts.length > 0)
+
+  const submit = async () => {
+    if (!pr || !canSubmit) return
+    const what = EVENTS.find((e) => e.id === event)!.label
+    const n = drafts.length
+    const ok = await confirmDialog(
+      'Submit review',
+      `Submit a “${what}” review to pull request #${pr.number} on GitHub${n ? ` with ${n} inline comment${n === 1 ? '' : 's'}` : ''}? Everyone with access to the repository will see it.`,
+      'Submit review',
+    )
+    if (!ok) return
+    setSubmitting(true)
+    try {
+      const r = await call('pr/comment', { cwd: root, number: pr.number, comments: drafts, body: body.trim() || null, event, confirmed: true })
+      if (r.ok) {
+        toast('Review submitted', 'success')
+        setDrafts([])
+        setBody('')
+        setEvent('comment')
+        void load()
+      } else toast(friendlyGitError(r.output), 'error')
+    } catch (e) {
+      toast(friendlyGitError(errMsg(e)), 'error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="prv" aria-label={`Pull request #${number}`}>
+      <div className="prv-head">
+        <button className="icon-btn sm" aria-label="Back to git summary" title="Back" onClick={onBack}>
+          <ArrowLeft size={14} />
+        </button>
+        {pr && <PrStateIcon state={pr.state} />}
+        <b className="small ellipsis grow">
+          #{number}
+          {pr ? ` ${pr.title}` : ''}
+        </b>
+        {pr && (
+          <button className="icon-btn sm" aria-label="Open on GitHub" title="Open on GitHub" onClick={() => void window.odex.shell.openExternal(pr.url)}>
+            <ExternalLink size={13} />
+          </button>
+        )}
+        <button className="icon-btn sm" title="Refresh" aria-label="Refresh pull request" onClick={() => void load()}>
+          {loading ? <span className="spinner" style={{ width: 11, height: 11 }} /> : <RefreshCw size={13} />}
+        </button>
+      </div>
+      <div className="prv-scroll">
+        {error ? (
+          <div className={`gp-note ${isGhSetupError(error) ? 'warn' : 'error'}`} role="alert">
+            {friendlyGitError(error)}
+          </div>
+        ) : !pr ? (
+          <div className="empty">
+            <span className="spinner" />
+          </div>
+        ) : (
+          <>
+            <div className="col" style={{ gap: 4 }}>
+              <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                <span className={`badge ${PR_STATE_CLASS[pr.state] ?? ''}`}>{pr.state}</span>
+                <span className="xs subtle">
+                  <span className="mono">{pr.head}</span> → <span className="mono">{pr.base}</span> · {pr.author} · <span className="text-add">+{pr.additions}</span> <span className="text-del">-{pr.deletions}</span>
+                </span>
+                {branch && pr.head === branch && <span className="badge accent">this branch</span>}
+              </div>
+            </div>
+            <ChecksList pr={pr} root={root} threadId={threadId} />
+            {pr.body && (
+              <details>
+                <summary className="xs subtle" style={{ cursor: 'pointer' }}>
+                  Description
+                </summary>
+                <div className="small">
+                  <Markdown text={pr.body} />
+                </div>
+              </details>
+            )}
+            {pr.timeline.length > 0 && (
+              <details>
+                <summary className="xs subtle" style={{ cursor: 'pointer' }}>
+                  Activity ({pr.timeline.length})
+                </summary>
+                <div className="gp-timeline" style={{ marginTop: 6 }}>
+                  {[...pr.timeline]
+                    .sort((a, b) => b.at - a.at)
+                    .slice(0, 30)
+                    .map((ev, i) => (
+                      <div key={i} className="gp-event">
+                        <div className="row xs" style={{ gap: 6 }}>
+                          <b>{ev.author ?? 'someone'}</b>
+                          <span className="subtle">{ev.kind}</span>
+                          <span className="spacer" />
+                          <span className="subtle">{ev.at ? relativeTime(ev.at) : ''}</span>
+                        </div>
+                        {ev.body && <div className="body">{ev.body}</div>}
+                      </div>
+                    ))}
+                </div>
+              </details>
+            )}
+            <div className="prv-files-head">
+              <b className="small grow">
+                Files changed <span className="badge">{pr.files.length}</span>
+              </b>
+              <button className="icon-btn sm" title={mode === 'unified' ? 'Split view' : 'Unified view'} aria-label={mode === 'unified' ? 'Switch to split view' : 'Switch to unified view'} onClick={() => setMode(mode === 'unified' ? 'split' : 'unified')}>
+                {mode === 'unified' ? <Columns2 size={13} /> : <Rows3 size={13} />}
+              </button>
+            </div>
+            {pr.files.length === 0 ? (
+              <div className="xs subtle">No file changes.</div>
+            ) : (
+              <DiffView
+                files={pr.files}
+                mode={mode}
+                onLineClick={onLineClick}
+                selection={selection}
+                annotations={annotations}
+                fileActions={(f) =>
+                  branch && pr.head === branch && f.status !== 'deleted' ? (
+                    <button className="icon-btn sm" title="Open file at the first change" aria-label={`Open ${f.path}`} onClick={() => openFileInPanel(joinPath(root, f.path), firstChangedLine(f))}>
+                      <FileText size={13} />
+                    </button>
+                  ) : null
+                }
+              />
+            )}
+          </>
+        )}
+      </div>
+      {pr && (
+        <div className="prv-reviewbar" aria-label="Your review">
+          <div className="row" style={{ gap: 8 }}>
+            <b className="small">Your review</b>
+            {drafts.length > 0 && (
+              <span className="badge accent">
+                {drafts.length} inline comment{drafts.length === 1 ? '' : 's'}
+              </span>
+            )}
+            <span className="spacer" />
+            {drafts.length > 0 && (
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() =>
+                  void (async () => {
+                    if (await confirmDialog('Discard review comments', `Discard ${drafts.length} draft comment(s)?`, 'Discard', true)) setDrafts([])
+                  })()
+                }
+              >
+                <Trash2 size={12} /> Discard
+              </button>
+            )}
+          </div>
+          <textarea className="textarea" aria-label="Review summary" placeholder="Leave a summary (optional for Approve)…" value={body} onChange={(e) => setBody(e.target.value)} />
+          <div className="row" style={{ gap: 8 }}>
+            <div className="prv-events" role="radiogroup" aria-label="Review event">
+              {EVENTS.map((ev) => (
+                <label key={ev.id}>
+                  <input type="radio" name={`prv-event-${number}`} checked={event === ev.id} onChange={() => setEvent(ev.id)} />
+                  {ev.label}
+                </label>
+              ))}
+            </div>
+            <span className="spacer" />
+            <button className="btn btn-sm btn-primary" disabled={!canSubmit} onClick={() => void submit()}>
+              {submitting ? <span className="spinner" style={{ width: 11, height: 11 }} /> : <Send size={12} />} Submit review
+            </button>
+          </div>
+          {drafts.length === 0 && <div className="xs subtle">Click a line number in the diff to add an inline comment.</div>}
+        </div>
+      )}
     </div>
   )
 }

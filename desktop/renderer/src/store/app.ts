@@ -29,6 +29,8 @@ export interface Attachment {
   label: string
   input: UserInput
   preview?: string
+  /** What the chip represents when `input.type` alone doesn't say (folder, thread, computer, ...). */
+  kind?: 'folder' | 'thread' | 'computer' | 'mcpResource'
 }
 
 export interface ThreadState {
@@ -77,6 +79,12 @@ export interface UiState {
   newThreadRunMode: 'local' | 'worktree'
   popout: boolean
   findOpen: boolean
+  /** Side-panel tab order (drag to reorder); missing tabs keep their default place. */
+  sidePanelOrder: SidePanelTab[]
+  /** `full`: the side panel takes the whole center and the chat is hidden. */
+  sidePanelLayout: 'split' | 'full'
+  /** Chat ↔ tabs swap: the side panel sits left of the chat. */
+  sidePanelSwap: boolean
 }
 
 interface AppState {
@@ -137,14 +145,38 @@ const defaultUi: UiState = {
   newThreadRunMode: 'local',
   popout: false,
   findOpen: false,
+  sidePanelOrder: [],
+  sidePanelLayout: 'split',
+  sidePanelSwap: false,
 }
 
+/** The Quick Chat window (`?quickchat=1`) never writes UI state to the shared localStorage either. */
+const IS_QUICKCHAT = (() => {
+  try {
+    return new URLSearchParams(location.search).has('quickchat')
+  } catch {
+    return false
+  }
+})()
+
+/** Pop-out windows (`?popout=1`) share localStorage with the main window but never write UI state to it. */
+const IS_POPOUT = (() => {
+  try {
+    return new URLSearchParams(location.search).has('popout')
+  } catch {
+    return false
+  }
+})()
+
 function loadUi(): UiState {
+  const windowUi = IS_POPOUT ? { popout: true, sidebarOpen: false } : { popout: false }
   try {
     const saved = JSON.parse(localStorage.getItem('odex.ui') || '{}') as Partial<UiState>
-    return { ...defaultUi, ...saved, paletteOpen: false, contextViewOpen: false, onboardingOpen: false, findOpen: false }
+    // older builds leaked a pop-out's `popout`/`sidebarOpen: false` into the shared state
+    if (saved.popout) saved.sidebarOpen = true
+    return { ...defaultUi, ...saved, paletteOpen: false, contextViewOpen: false, onboardingOpen: false, findOpen: false, ...windowUi }
   } catch {
-    return defaultUi
+    return { ...defaultUi, ...windowUi }
   }
 }
 
@@ -227,8 +259,9 @@ export const useApp = create<AppState>((set, get) => ({
   setUi: (patch) => {
     const ui = { ...get().ui, ...patch }
     set({ ui })
+    if (IS_POPOUT || IS_QUICKCHAT || ui.popout) return
     try {
-      const { view: _v, paletteOpen: _p, contextViewOpen: _c, onboardingOpen: _o, ...persist } = ui
+      const { view: _v, paletteOpen: _p, contextViewOpen: _c, onboardingOpen: _o, popout: _w, ...persist } = ui
       localStorage.setItem('odex.ui', JSON.stringify(persist))
     } catch {}
   },

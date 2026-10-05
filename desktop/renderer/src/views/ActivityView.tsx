@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Archive, Bell, Check, CheckCheck, CircleAlert, Clock, MessageSquare } from 'lucide-react'
+import { Archive, Bell, Check, CheckCheck, CircleAlert, Clock, MessageSquare, Square } from 'lucide-react'
 import type { AutomationRun, Thread } from '@shared/index'
 import { useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
+import * as A from '@/lib/actions'
 import { relativeTime } from '@/components/ui'
 import { BACKGROUND_NOTE, RunStatusBadge, RunStatusIcon, ago, archiveRuns, duration, markRunsRead, openRun, refreshRunsStore, threadTitle } from '@/views/AutomationsView'
 import '@/styles/automations.css'
@@ -54,6 +55,53 @@ function AttentionRow({ t }: { t: Thread }) {
       <div className="act-actions">
         <button className="btn btn-sm" onClick={open}>
           Open
+        </button>
+      </div>
+    </li>
+  )
+}
+
+const RUNNING_LABEL: Record<string, string> = { running: 'Running', compacting: 'Compacting', reconnecting: 'Reconnecting' }
+
+/** Threads the inbox shows (not archived, temporary, subagent or side chats). */
+function listed(t: Thread | undefined): t is Thread {
+  return !!t && !t.archived && !t.ephemeral && t.kind !== 'subagent' && t.kind !== 'side'
+}
+
+function isActive(t: Thread): boolean {
+  return t.status === 'running' || t.status === 'compacting' || t.status === 'reconnecting'
+}
+
+/** A thread with a turn in progress. */
+function RunningRow({ t }: { t: Thread }) {
+  const project = useApp((s) => s.projects.find((p) => p.id === t.projectId))
+  const open = () => void useApp.getState().selectThread(t.id)
+  return (
+    <li className="act-item">
+      <span className="act-icon">
+        <span className="spinner" aria-hidden />
+      </span>
+      <button className="act-main" onClick={open} title="Open thread">
+        <span className="row" style={{ gap: 6 }}>
+          <span className="act-title ellipsis">{threadTitle(t)}</span>
+          {t.kind === 'automation' && <Clock size={12} className="subtle" aria-label="automation thread" />}
+          <span className={`badge ${t.status === 'running' ? 'accent' : 'warning'}`}>{RUNNING_LABEL[t.status] ?? t.status}</span>
+          {t.goal && (t.goal.status === 'active' || t.goal.status === 'paused') && <span className="badge">goal</span>}
+        </span>
+        <span className="act-sub ellipsis">
+          {project ? `${project.name} · ` : ''}
+          {t.goal?.status === 'active' ? `Goal: ${t.goal.objective}` : t.preview || 'Working…'}
+        </span>
+      </button>
+      <span className="act-time" title={new Date(t.updatedAt).toLocaleString()}>
+        {relativeTime(t.updatedAt)}
+      </span>
+      <div className="act-actions">
+        <button className="btn btn-sm" onClick={open}>
+          Open
+        </button>
+        <button className="icon-btn sm" aria-label="Stop" title="Stop the running turn" onClick={() => void A.interrupt(t.id)}>
+          <Square size={12} />
         </button>
       </div>
     </li>
@@ -131,6 +179,16 @@ export function ActivityView() {
     }
   }, [filter, runsLive])
 
+  const runningThreads = useMemo(
+    () =>
+      order
+        .map((id) => threadsMap[id]?.thread)
+        .filter((t): t is Thread => listed(t) && isActive(t))
+        .sort((a, b) => b.updatedAt - a.updatedAt),
+    [order, threadsMap],
+  )
+  const unreadThreads = useMemo(() => order.filter((id) => threadsMap[id]?.thread.unread && !threadsMap[id]?.thread.archived), [order, threadsMap])
+
   const attention = useMemo(
     () =>
       order
@@ -151,14 +209,18 @@ export function ActivityView() {
 
   const markAllRead = async () => {
     try {
-      const r = await call('automation/runs', { unreadOnly: true, includeArchived: false, limit: 0 })
-      await markRunsRead(r.runs.map((x) => x.id))
+      // unread threads and unread automation runs
+      await Promise.all(unreadThreads.map((threadId) => call('thread/update', { threadId, unread: false })))
+      if (unreadCount > 0) {
+        const r = await call('automation/runs', { unreadOnly: true, includeArchived: false, limit: 0 })
+        await markRunsRead(r.runs.map((x) => x.id))
+      }
     } catch (e) {
       toast(`Could not mark all read: ${(e as Error).message}`, 'error')
     }
   }
 
-  const empty = attention.length === 0 && runsLive.length === 0 && filter !== 'archived'
+  const empty = attention.length === 0 && runningThreads.length === 0 && runsLive.length === 0 && filter !== 'archived'
 
   return (
     <div className="auto-page">
@@ -166,9 +228,9 @@ export function ActivityView() {
         <header className="auto-header">
           <div className="grow">
             <h1>Activity</h1>
-            <p>Automation results to review and threads waiting on you.</p>
+            <p>Threads at work, threads waiting on you, and automation results to review.</p>
           </div>
-          <button className="btn" disabled={unreadCount === 0} onClick={() => void markAllRead()}>
+          <button className="btn" disabled={unreadCount === 0 && unreadThreads.length === 0} onClick={() => void markAllRead()} title="Mark unread threads and automation runs as read">
             <CheckCheck size={14} /> Mark all read
           </button>
         </header>
@@ -190,6 +252,20 @@ export function ActivityView() {
           </div>
         ) : (
           <>
+            {runningThreads.length > 0 && (
+              <section className="act-section" aria-label="Running">
+                <div className="act-section-head">
+                  <span className="section-title">Running</span>
+                  <span className="badge accent">{runningThreads.length}</span>
+                </div>
+                <ul className="act-list">
+                  {runningThreads.map((t) => (
+                    <RunningRow key={t.id} t={t} />
+                  ))}
+                </ul>
+              </section>
+            )}
+
             {attention.length > 0 && (
               <section className="act-section" aria-label="Needs attention">
                 <div className="act-section-head">

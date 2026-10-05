@@ -4,13 +4,17 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  ClipboardCheck,
   Columns2,
+  ExternalLink,
   FileText,
   GitBranch,
   MessageSquare,
   Minus,
   MoreHorizontal,
   Pencil,
+  PictureInPicture2,
+  Pin,
   Plus,
   RefreshCw,
   Rows3,
@@ -28,7 +32,7 @@ import { confirmDialog, sendMessage } from '@/lib/actions'
 import { Menu, basename, useMenu, type MenuItem } from '@/components/ui'
 import { DiffView, StatusBadge, anchorKey, splitPath, type LineAnchor, type LineSelection } from '@/components/DiffView'
 import { openFileInPanel } from '@/views/items'
-import { friendlyGitError, isAbsolute, joinPath, normPath, relativeTo, samePath, takeReviewRequest, useRepoContext } from '@/panels/gitShared'
+import { firstChangedLine, friendlyGitError, isAbsolute, isDetachedReviewWindow, joinPath, normPath, relativeTo, samePath, takeReviewRequest, useRepoContext } from '@/panels/gitShared'
 import '@/styles/review.css'
 
 type Kind = 'uncommitted' | 'unstaged' | 'staged' | 'lastTurn' | 'base' | 'commit'
@@ -456,8 +460,23 @@ export function ReviewPanel() {
             <Undo2 size={13} />
           </button>
         )}
-        <button className="icon-btn sm" title="Open file" aria-label={`Open ${f.path}`} disabled={f.status === 'deleted'} onClick={() => openFileInPanel(joinPath(repoRoot, f.path))}>
+        <button
+          className="icon-btn sm"
+          title="Open file at the first change"
+          aria-label={`Open ${f.path}`}
+          disabled={f.status === 'deleted'}
+          onClick={() => openFileInPanel(joinPath(repoRoot, f.path), firstChangedLine(f))}
+        >
           <FileText size={13} />
+        </button>
+        <button
+          className="icon-btn sm"
+          title="Open in external editor at the first change"
+          aria-label={`Open ${f.path} in external editor`}
+          disabled={f.status === 'deleted'}
+          onClick={() => void window.odex.shell.openInEditor(joinPath(repoRoot, f.path), firstChangedLine(f))}
+        >
+          <ExternalLink size={13} />
         </button>
       </>
     )
@@ -650,6 +669,11 @@ export function ReviewPanel() {
         <button className="icon-btn sm" title="Refresh" aria-label="Refresh diff" onClick={() => (void load(), void loadRefs())}>
           {loading ? <span className="spinner" style={{ width: 11, height: 11 }} /> : <RefreshCw size={13} />}
         </button>
+        {threadId && !isDetachedReviewWindow() && (
+          <button className="icon-btn sm" title="Open review in a separate window" aria-label="Pop out review" onClick={() => void window.odex.win.newWindow(threadId, 'review')}>
+            <PictureInPicture2 size={13} />
+          </button>
+        )}
         <button className="icon-btn sm" title="More" aria-label="More review actions" onClick={openMenu}>
           <MoreHorizontal size={13} />
         </button>
@@ -888,7 +912,7 @@ export function ReviewPanel() {
   )
 }
 
-function CommentComposer({ label, draftRef, onSubmit, onCancel }: { label: string; draftRef: { current: string }; onSubmit: (body: string) => void; onCancel: () => void }) {
+export function CommentComposer({ label, draftRef, onSubmit, onCancel, placeholder }: { label: string; draftRef: { current: string }; onSubmit: (body: string) => void; onCancel: () => void; placeholder?: string }) {
   const [text, setText] = useState(draftRef.current)
   const update = (v: string) => {
     draftRef.current = v
@@ -901,7 +925,7 @@ function CommentComposer({ label, draftRef, onSubmit, onCancel }: { label: strin
         className="textarea"
         autoFocus
         aria-label="Review comment"
-        placeholder="Leave a comment for the agent… (Ctrl+Enter to add)"
+        placeholder={placeholder ?? 'Leave a comment for the agent… (Ctrl+Enter to add)'}
         value={text}
         onChange={(e) => update(e.target.value)}
         onKeyDown={(e) => {
@@ -926,7 +950,7 @@ function CommentComposer({ label, draftRef, onSubmit, onCancel }: { label: strin
   )
 }
 
-function PendingCard({ comment, onDelete, onEdit }: { comment: ReviewComment; onDelete: () => void; onEdit: (body: string) => void }) {
+export function PendingCard({ comment, onDelete, onEdit }: { comment: ReviewComment; onDelete: () => void; onEdit: (body: string) => void }) {
   const [open, setOpen] = useState(true)
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(comment.body)
@@ -1004,6 +1028,51 @@ function FindingCard({ finding }: { finding: ReviewFinding }) {
       </div>
       {open && finding.body && <div className="rv-comment-body small selectable">{finding.body}</div>}
     </div>
+  )
+}
+
+/** The detached review window (`?thread=<id>&panel=review`): only the thread's review panel. */
+export function DetachedReview() {
+  const thread = useApp((s) => (s.selectedThreadId ? s.threads[s.selectedThreadId]?.thread : undefined))
+  const ready = useApp((s) => s.ui.view === 'thread' && !!s.selectedThreadId)
+  const [onTop, setOnTop] = useState(false)
+  const mac = window.odex.platform === 'darwin'
+  const title = thread ? thread.name || thread.preview || 'Thread' : ''
+  useEffect(() => {
+    document.title = title ? `Review: ${title}` : 'Review'
+  }, [title])
+  return (
+    <>
+      <div className={`titlebar ${mac ? 'mac' : ''}`}>
+        <ClipboardCheck size={14} className="subtle" aria-hidden />
+        <span className="small" style={{ fontWeight: 600 }}>
+          Review
+        </span>
+        <span className="title ellipsis">{title}</span>
+        <span className="spacer" />
+        <button
+          className={`icon-btn ${onTop ? 'active' : ''}`}
+          aria-label="Keep window on top"
+          aria-pressed={onTop}
+          title="Always on top"
+          onClick={() => {
+            void window.odex.win.alwaysOnTop(!onTop)
+            setOnTop(!onTop)
+          }}
+        >
+          <Pin size={14} />
+        </button>
+      </div>
+      <div className="main rv-detached" aria-label="Review window">
+        {ready ? (
+          <ReviewPanel />
+        ) : (
+          <div className="empty">
+            <span className="spinner" />
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 

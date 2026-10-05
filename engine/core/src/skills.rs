@@ -74,7 +74,31 @@ pub fn list(engine: &Engine, root: Option<&Path>, s: &Settings) -> Vec<SkillInfo
     for (plugin_id, dir) in crate::plugins::skill_dirs(engine) {
         scan(&dir, SkillScope::Plugin, Some(&plugin_id), &s.disabled_skills, &mut out);
     }
+    // built-in skills come last, so a user or project skill of the same name overrides them
+    if let Some(dir) = builtin_skills_dir(engine) {
+        scan(&dir, SkillScope::Builtin, None, &s.disabled_skills, &mut out);
+    }
     out
+}
+
+/// Skills compiled into the engine: (folder name, SKILL.md).
+pub const BUILTIN_SKILLS: &[(&str, &str)] = &[("skill-creator", include_str!("builtin_skills/skill-creator/SKILL.md"))];
+
+/// Write the built-in skills under `~/.odex/builtin-skills/` (so the agent can
+/// `read_file` them like any other skill) and return that folder. Files are
+/// rewritten only when their content differs from the compiled-in version.
+pub fn builtin_skills_dir(engine: &Engine) -> Option<PathBuf> {
+    let root = engine.home.root().join("builtin-skills");
+    for (name, text) in BUILTIN_SKILLS {
+        let p = root.join(name).join("SKILL.md");
+        if std::fs::read_to_string(&p).ok().as_deref() != Some(*text) {
+            if let Err(e) = std::fs::create_dir_all(root.join(name)).and_then(|_| std::fs::write(&p, text)) {
+                tracing::warn!("could not write built-in skill {name}: {e}");
+                return None;
+            }
+        }
+    }
+    Some(root)
 }
 
 pub fn find(engine: &Engine, root: Option<&Path>, s: &Settings, name: &str) -> Option<(SkillInfo, String)> {

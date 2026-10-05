@@ -40,6 +40,15 @@ pub struct ConfigToml {
     /// Where worktrees live; default `~/.odex/worktrees`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktrees_dir: Option<String>,
+    /// `[worktrees]`: retention of thread worktrees.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktrees: Option<WorktreesToml>,
+    /// Extra guidance appended to every `/review` request ("Code review" settings).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_instructions: Option<String>,
+    /// `[git]`: branch prefix, force push, commit / PR prompt additions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitToml>,
 
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub roles: BTreeMap<String, String>,
@@ -429,11 +438,42 @@ pub struct AutomaticReviewToml {
     pub rubric: Option<String>,
 }
 
+/// `[git]`: settings for worktree branches, pushing, and AI-written commit / PR text.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default)]
+pub struct GitToml {
+    /// Prefix of the branches created for worktree threads (default `odex/`; `""` for none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_prefix: Option<String>,
+    /// Allow `--force-with-lease` pushes from the app (default false).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_force_push: Option<bool>,
+    /// Extra instructions appended to the commit-message prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_prompt: Option<String>,
+    /// Extra instructions appended to the pull-request draft prompt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_prompt: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(default)]
 pub struct SkillsToml {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub disabled: Vec<String>,
+}
+
+/// `[worktrees]`: how many thread worktrees to keep on disk.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default)]
+pub struct WorktreesToml {
+    /// Worktrees to keep (default 15). Beyond that, the oldest worktrees of archived threads
+    /// are removed (after a snapshot) when `auto_cleanup` is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep: Option<u32>,
+    /// Remove old worktrees of archived threads automatically (default true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_cleanup: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]

@@ -1,0 +1,184 @@
+/* Environments editor, local environments settings, worktree retention, move-to-worktree dialog,
+   per-OS action commands and the terminal panel's background sessions. */
+
+.env-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+.env-script {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg);
+}
+.env-script .textarea {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+.env-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 6px 3px 3px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunken);
+}
+.env-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+.env-tab:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.env-tab[aria-selected='true'] {
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-weight: 500;
+  box-shadow: 0 0 0 1px var(--border);
+}
+.env-tab .dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* per-OS action commands */
+.os-commands {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 6px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+}
+.os-commands label {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+/* Settings → Local environments */
+.envs-project {
+  padding: 0;
+  overflow: hidden;
+}
+.envs-project-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.envs-project-header:hover {
+  background: var(--bg-hover);
+}
+.envs-project-body {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* Settings → Worktrees: retention and setup state */
+.wt-setup {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.wt-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+/* Move to worktree dialog */
+.mtw-files {
+  max-height: 140px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  font-family: var(--font-code);
+  font-size: var(--font-size-xs);
+  list-style: none;
+}
+.mtw-files li {
+  display: flex;
+  gap: 8px;
+  white-space: nowrap;
+}
+.mtw-files .code {
+  width: 2ch;
+  color: var(--fg-subtle);
+}
+
+/* Terminal panel: background (agent) sessions */
+.bg-sessions {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--bg-elev);
+}
+.bg-session {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.bg-session:last-child {
+  border-bottom: none;
+}
+.bg-session .cmd {
+  font-family: var(--font-code);
+  font-size: var(--font-size-sm);
+}
+.bg-session.exited .cmd {
+  color: var(--fg-muted);
+}
+.term-bg-tab {
+  margin-left: auto;
+}
+/* leave room for the bottom panel's close button */
+.bottom-panel .term-bg-tab {
+  margin-right: 26px;
+}
+.term-bg-tab[aria-pressed='true'] {
+  background: var(--bg-active);
+  color: var(--fg);
+  font-weight: 500;
+}
+.env-label {
+  padding: 0 6px 0 5px;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+.env-card > .env-label {
+  padding: 0;
+}

@@ -4,4 +4,8 @@ export type PrViewParams = { cwd: string,
 /**
  * PR number; default: the PR for the current branch.
  */
-number?: number | null, };
+number?: number | null, 
+/**
+ * Thread whose branch this is: a found PR updates the thread's PR summary.
+ */
+threadId?: string | null, };

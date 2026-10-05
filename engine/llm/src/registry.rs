@@ -246,6 +246,17 @@ impl ModelRegistry {
             .or_else(|| self.cached(provider, model_id).and_then(|c| c.max_model_len))
     }
 
+    /// Models a reachable endpoint currently lists (`None` when it was never
+    /// probed, is unreachable, or listed nothing).
+    pub fn served_models(&self, provider: &str) -> Option<Vec<DiscoveredModel>> {
+        let st = self.state.read().unwrap();
+        let s = st.get(provider)?;
+        if matches!(s.health, None | Some(EndpointHealth::Unreachable)) || s.models.is_empty() {
+            return None;
+        }
+        Some(s.models.clone())
+    }
+
     fn is_discovered(&self, provider: &str, model_id: &str) -> bool {
         self.state.read().unwrap().get(provider).map(|s| s.models.iter().any(|m| m.id == model_id)).unwrap_or(false)
     }

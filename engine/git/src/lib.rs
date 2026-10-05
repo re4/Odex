@@ -26,6 +26,7 @@ use tokio::sync::OnceCell;
 
 pub use diff::{build_hunk_patch, parse_unified_diff};
 pub use error::{GitError, Result};
+pub use worktree::MovedChanges;
 
 use cmd::{native_path, GitCommand};
 

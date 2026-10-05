@@ -100,7 +100,7 @@ impl EventSink for ExecSink {
                         if self.auto_approve { "approved" } else { "denied" }
                     );
                 }
-                Ok(serde_json::to_value(ApprovalResponse { decision })?)
+                Ok(serde_json::to_value(ApprovalResponse { decision, persist: None })?)
             }
             server_request::ELICITATION_REQUEST => Ok(serde_json::json!({"action": "decline"})),
             _ => anyhow::bail!("`{method}` is not available in exec mode"),

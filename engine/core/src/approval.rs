@@ -245,7 +245,17 @@ pub async fn request(
     let req_fut = em.request(server_request::APPROVAL_REQUEST, &params);
     let decision = tokio::select! {
         r = req_fut => match r.and_then(|v| Ok(serde_json::from_value::<ApprovalResponse>(v)?)) {
-            Ok(resp) => resp.decision,
+            Ok(resp) => {
+                // "Always allow <prefix>": persist an exec policy rule
+                if resp.persist == Some(true) && resp.decision == ApprovalDecision::ApproveForSession {
+                    if let ApprovalKind::Exec { prefix, .. } = &params.approval {
+                        if let Err(e) = crate::toolexec::remember_exec_rule(engine, prefix) {
+                            tracing::warn!("could not save the allow rule: {e:#}");
+                        }
+                    }
+                }
+                resp.decision
+            }
             Err(e) => {
                 tracing::warn!("approval request failed: {e:#}");
                 ApprovalDecision::Deny { feedback: Some(format!("Approval could not be obtained ({e}); the action was not run.")) }

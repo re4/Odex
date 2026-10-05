@@ -4,4 +4,12 @@ export type WorktreeInfo = { path: string, branch: string, baseBranch?: string |
 /**
  * The local checkout the worktree belongs to.
  */
-repoRoot: string, setupStatus?: string | null, };
+repoRoot: string, 
+/**
+ * Environment setup script state: `running`, `ok`, `failed…` (none without a script).
+ */
+setupStatus?: string | null, 
+/**
+ * Log file with the setup script's full output.
+ */
+setupLog?: string | null, };

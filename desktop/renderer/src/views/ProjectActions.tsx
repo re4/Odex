@@ -3,6 +3,7 @@ import { Hammer, Play, Server, Sparkles, TestTube2 } from 'lucide-react'
 import type { ProjectAction } from '@shared/index'
 import { useApp } from '@/store/app'
 import { toast } from '@/lib/rpc'
+import { actionCommand, threadEnvVars } from '@/lib/environments'
 
 const ICON: Record<string, React.ReactNode> = {
   play: <Play size={13} />,
@@ -17,12 +18,20 @@ function join(base: string, rel: string): string {
   return `${base.replace(/[\\/]+$/, '')}/${rel}`
 }
 
-/** Run a project action in the integrated terminal (and open its URL in the in-app browser). */
+/**
+ * Run a project action in the integrated terminal: the command for this OS, with the thread's
+ * environment variables. Its `openUrl` opens in the in-app browser; without one, local dev-server
+ * URLs the command prints are opened (Settings → General).
+ */
 export async function runProjectAction(a: ProjectAction, threadId: string | null, baseCwd: string): Promise<void> {
   const st = useApp.getState()
   const cwd = a.cwd ? join(baseCwd, a.cwd) : baseCwd
+  const thread = threadId ? st.threads[threadId]?.thread : undefined
+  const project = st.projects.find((p) => p.id === (thread?.projectId ?? st.ui.newThreadProjectId))
   try {
-    await window.odex.terminals.run({ threadId, cwd, command: a.command, title: a.name })
+    const info = (await window.odex.terminals.run({ threadId, cwd, command: actionCommand(a), title: a.name, env: threadEnvVars(thread, project), detectUrls: !a.openUrl })) as { id: string }
+    // an open terminal panel switches to the new tab
+    window.dispatchEvent(new CustomEvent('odex:terminal-created', { detail: info.id }))
   } catch (e) {
     toast(`Could not run ${a.name}: ${(e as Error).message}`, 'error')
     return
@@ -56,7 +65,7 @@ export function ProjectActions({ projectId, threadId, cwd }: { projectId: string
   return (
     <div className="row" style={{ gap: 2 }} aria-label="Project actions">
       {actions.slice(0, 4).map((a, i) => (
-        <button key={a.id} className="btn btn-sm btn-ghost" title={`${a.command}${i === 0 ? ' (Ctrl+Shift+D)' : ''}`} onClick={() => void runProjectAction(a, threadId, cwd)}>
+        <button key={a.id} className="btn btn-sm btn-ghost" title={`${actionCommand(a)}${i === 0 ? ' (Ctrl+Shift+D)' : ''}`} onClick={() => void runProjectAction(a, threadId, cwd)}>
           {ICON[a.icon ?? 'play'] ?? ICON.play}
           <span className="ellipsis" style={{ maxWidth: 110 }}>
             {a.name}

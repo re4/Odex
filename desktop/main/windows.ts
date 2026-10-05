@@ -43,7 +43,7 @@ function overlayColors(): { color: string; symbolColor: string; height: number }
 
 export let mainWindow: BrowserWindow | null = null
 
-export function createWindow(opts: { threadId?: string; popout?: boolean } = {}): BrowserWindow {
+export function createWindow(opts: { threadId?: string; popout?: boolean; panel?: string } = {}): BrowserWindow {
   const isMain = !opts.popout && !mainWindow
   const b = isMain ? loadBounds() : { width: 900, height: 800 }
   const w = new BrowserWindow({
@@ -68,6 +68,7 @@ export function createWindow(opts: { threadId?: string; popout?: boolean } = {})
   const q: Record<string, string> = {}
   if (opts.threadId) q.thread = opts.threadId
   if (opts.popout) q.popout = '1'
+  if (opts.panel) q.panel = opts.panel
   const target = rendererUrl(q)
   if (target.url) void w.loadURL(target.url)
   else void w.loadFile(target.file!, { query: target.query })
@@ -115,6 +116,61 @@ export function updateTitleBars(): void {
       w.setBackgroundColor(isDark() ? '#16171c' : '#fbfbfd')
     } catch {}
   }
+}
+
+export let quickChatWindow: BrowserWindow | null = null
+
+/** The small Quick Chat window (one at a time): a projectless chat, thread view + composer only. */
+export function openQuickChat(): BrowserWindow {
+  if (quickChatWindow && !quickChatWindow.isDestroyed()) {
+    if (quickChatWindow.isMinimized()) quickChatWindow.restore()
+    quickChatWindow.show()
+    quickChatWindow.focus()
+    return quickChatWindow
+  }
+  const s = getSettings()
+  const w = new BrowserWindow({
+    width: 520,
+    height: 640,
+    minWidth: 380,
+    minHeight: 360,
+    show: false,
+    title: 'Odex Quick Chat',
+    icon: resourcePath('icon.png'),
+    alwaysOnTop: !!s.quickChatOnTop,
+    backgroundColor: isDark() ? '#16171c' : '#fbfbfd',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    titleBarOverlay: process.platform === 'darwin' ? undefined : overlayColors(),
+    webPreferences: {
+      preload: preloadPath(),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      spellcheck: true,
+    },
+  })
+  const target = rendererUrl({ quickchat: '1' })
+  if (target.url) void w.loadURL(target.url)
+  else void w.loadFile(target.file!, { query: target.query })
+  w.once('ready-to-show', () => {
+    if (!process.env.ODEX_HIDDEN) w.show()
+  })
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  w.webContents.on('will-navigate', (e, url) => {
+    if (!url.startsWith('http://localhost') && !url.startsWith('file:')) {
+      e.preventDefault()
+      if (/^https?:/.test(url)) void shell.openExternal(url)
+    }
+  })
+  w.on('closed', () => {
+    if (quickChatWindow === w) quickChatWindow = null
+  })
+  w.webContents.setZoomFactor(s.zoom || 1)
+  quickChatWindow = w
+  return w
 }
 
 export function showMain(): BrowserWindow {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { PanelLeft, PanelBottom, PanelRight } from 'lucide-react'
-import { afterReady, useApp } from '@/store/app'
+import { afterReady, isRunning, useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import { useShortcuts } from '@/lib/shortcuts'
 import * as A from '@/lib/actions'
@@ -12,12 +12,18 @@ import { ServerRequests } from '@/views/ServerRequests'
 import { Onboarding } from '@/views/Onboarding'
 import { SettingsView } from '@/views/settings/SettingsView'
 import { SidePanel } from '@/panels/SidePanel'
+import { DetachedReview } from '@/panels/ReviewPanel'
+import { openReview } from '@/panels/gitShared'
 import { BottomPanel } from '@/panels/BottomPanel'
 import { CommandPalette } from '@/views/CommandPalette'
 import { ContextView } from '@/views/ContextView'
 import { ActivityView } from '@/views/ActivityView'
 import { AutomationsView } from '@/views/AutomationsView'
 import { SearchView } from '@/views/SearchView'
+import { QuickChat } from '@/views/QuickChat'
+import { AskOdex } from '@/components/AskOdex'
+import { ImageLightbox } from '@/components/ImageLightbox'
+import { DoctorHost } from '@/views/DoctorModal'
 import { handleDeepLink } from '@/lib/deeplinks'
 
 function applyTheme(): void {
@@ -33,7 +39,15 @@ function applyTheme(): void {
   root.style.setProperty('--font-ui', s.uiFont)
   root.style.setProperty('--font-code', s.codeFont)
   root.style.setProperty('--font-size', `${s.fontSize}px`)
+  // background / foreground overrides (Settings → General → Appearance)
+  for (const [v, c] of [['--bg', s.bgColor], ['--fg', s.fgColor]] as const) {
+    if (c) root.style.setProperty(v, c)
+    else root.style.removeProperty(v)
+  }
 }
+
+/** The Quick Chat window (`?quickchat=1`): thread view + composer for one projectless chat. */
+const QUICK_CHAT = new URLSearchParams(location.search).has('quickchat')
 
 function PromptHost() {
   const [p, setP] = useState<{ title: string; initial: string; resolve: (v: string | null) => void } | null>(null)
@@ -180,7 +194,7 @@ export function App() {
       window.odex.onDeepLink((url) => void handleDeepLink(url)),
       window.odex.onCommand((c) => {
         if (c.command === 'newThread') void useApp.getState().selectThread(null)
-        if (c.command === 'quickChat') void A.createThread({ kind: 'quickChat' })
+        if (c.command === 'quickChat') void window.odex.win.quickChat()
         if (c.command === 'openThread' && c.threadId) void useApp.getState().selectThread(c.threadId)
         if (c.command === 'nextAttention') nextAttention()
       }),
@@ -235,13 +249,19 @@ export function App() {
         if (useApp.getState().settings?.terminalLocation === 'right') setUi({ sidePanelOpen: !(u.sidePanelOpen && u.sidePanelTab === 'terminal'), sidePanelTab: 'terminal' })
         else setUi({ bottomOpen: !u.bottomOpen })
       },
-      openReview: () => setUi({ sidePanelOpen: true, sidePanelTab: 'review' }),
-      toggleFileTree: () => setUi({ sidePanelOpen: true, sidePanelTab: 'files' }),
-      cycleLayout: () => {
+      openReview: () => openReview(),
+      toggleFileTree: () => {
+        // open Files (or switch to it); close the panel when Files is already showing
         const u = useApp.getState().ui
-        if (!u.sidePanelOpen) setUi({ sidePanelOpen: true })
-        else if (u.sidePanelWidth < 700) setUi({ sidePanelWidth: Math.round(window.innerWidth * 0.62) })
-        else setUi({ sidePanelOpen: false, sidePanelWidth: 460 })
+        if (u.sidePanelOpen && u.sidePanelTab === 'files') setUi({ sidePanelOpen: false, sidePanelLayout: 'split' })
+        else setUi({ sidePanelOpen: true, sidePanelTab: 'files' })
+      },
+      cycleLayout: () => {
+        // hidden → split → full width (chat hidden) → hidden
+        const u = useApp.getState().ui
+        if (!u.sidePanelOpen) setUi({ sidePanelOpen: true, sidePanelLayout: 'split' })
+        else if (u.sidePanelLayout !== 'full') setUi({ sidePanelLayout: 'full' })
+        else setUi({ sidePanelOpen: false, sidePanelLayout: 'split' })
       },
       newBrowserTab: () => {
         setUi({ sidePanelOpen: true, sidePanelTab: 'browser' })
@@ -253,7 +273,7 @@ export function App() {
         setUi({ newThreadProjectId: null })
         void useApp.getState().selectThread(null)
       },
-      quickChat: () => void A.createThread({ kind: 'quickChat' }),
+      quickChat: () => void window.odex.win.quickChat(),
       archive: () => withThread((id) => A.archiveThread(id)),
       markUnread: () => withThread((id) => A.markUnread(id)),
       pin: () => withThread((id) => A.togglePin(id)),
@@ -280,14 +300,36 @@ export function App() {
       copyCwd: () => withThread((id) => A.copy(useApp.getState().threads[id]?.thread.cwd ?? '', 'Working directory copied')),
       runAction1: () => window.dispatchEvent(new CustomEvent('odex:run-action', { detail: 0 })),
       undo: () => void A.undoLast(),
+      redo: () => void A.redoLast(),
+      redo2: () => void A.redoLast(),
+      interrupt: (e?: KeyboardEvent) => interruptSelected(e),
       quit: () => void window.odex.app.quit(),
       ...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`goto${i + 1}`, () => gotoThread(i)])),
+      ...Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`recent${i + 1}`, () => gotoRecent(i)])),
     }),
     [setUi],
   )
   useShortcuts(handlers)
 
   if (!settings) return <div className="app" />
+  if (QUICK_CHAT) {
+    return (
+      <QuickChat>
+        <PromptHost />
+        <Toasts />
+      </QuickChat>
+    )
+  }
+  if (new URLSearchParams(location.search).get('panel') === 'review') {
+    // detached review: a pop-out window with only the thread's review panel
+    return (
+      <div className="app">
+        <DetachedReview />
+        <PromptHost />
+        <Toasts />
+      </div>
+    )
+  }
   const showSide = ui.sidePanelOpen && (ui.view === 'thread' || ui.view === 'home')
   return (
     <div className="app">
@@ -324,8 +366,8 @@ export function App() {
           </>
         )}
         <div className="center">
-          <div className="center-split">
-            <div className="center-main">
+          <div className={`center-split ${showSide && ui.sidePanelSwap && ui.sidePanelLayout !== 'full' ? 'swapped' : ''}`}>
+            <div className={`center-main ${showSide && ui.sidePanelLayout === 'full' ? 'chat-hidden' : ''}`}>
               {ui.view === 'settings' ? (
                 <SettingsView />
               ) : ui.view === 'activity' ? (
@@ -342,8 +384,10 @@ export function App() {
             </div>
             {showSide && (
               <>
-                <ResizeHandle axis="x" invert value={ui.sidePanelWidth} min={300} max={Math.max(320, window.innerWidth - 420)} onChange={(v) => setUi({ sidePanelWidth: v })} label="Resize side panel" />
-                <SidePanel width={ui.sidePanelWidth} />
+                {ui.sidePanelLayout !== 'full' && (
+                  <ResizeHandle axis="x" invert={!ui.sidePanelSwap} value={ui.sidePanelWidth} min={300} max={Math.max(320, window.innerWidth - 420)} onChange={(v) => setUi({ sidePanelWidth: v })} label="Resize side panel" />
+                )}
+                <SidePanel width={ui.sidePanelWidth} full={ui.sidePanelLayout === 'full'} />
               </>
             )}
           </div>
@@ -360,6 +404,9 @@ export function App() {
       {ui.contextViewOpen && <ContextView />}
       {ui.onboardingOpen && <Onboarding />}
       <PromptHost />
+      <AskOdex />
+      <ImageLightbox />
+      <DoctorHost />
       <Toasts />
       {cu.active && cu.takeover && (
         <>
@@ -404,6 +451,41 @@ function navigateHistory(dir: number): void {
   useApp.setState({ historyIndex: idx, selectedThreadId: id })
   s.setUi({ view: 'thread' })
   if (!s.threads[id]?.loaded) void s.loadThread(id)
+}
+
+/** Recently viewed threads, most recent first (navigation history, distinct, excluding the current one). */
+function recentThreadIds(): string[] {
+  const s = useApp.getState()
+  const out: string[] = []
+  for (let i = s.history.length - 1; i >= 0; i--) {
+    const id = s.history[i]
+    const t = s.threads[id]?.thread
+    if (id === s.selectedThreadId || out.includes(id) || !t || t.archived) continue
+    out.push(id)
+  }
+  return out
+}
+
+function gotoRecent(i: number): void {
+  const id = recentThreadIds()[i]
+  if (id) void useApp.getState().selectThread(id)
+}
+
+/** The `interrupt` shortcut: stop the selected thread's running turn unless something else owns the key. */
+function interruptSelected(e?: KeyboardEvent): boolean | void {
+  const s = useApp.getState()
+  const id = s.selectedThreadId
+  if (!id || s.ui.view !== 'thread' || !isRunning(s.threads[id]?.thread)) return false
+  if (e) {
+    // a component already used the key (composer suggestions, editors)
+    if (e.defaultPrevented) return false
+    if (s.ui.paletteOpen || s.ui.contextViewOpen || document.querySelector('.modal-backdrop, .menu, .mention-menu, .lightbox')) return false
+    // plain keys stay with other text fields (find bar, message editor, terminal)
+    const t = e.target as HTMLElement | null
+    const editable = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+    if (editable && !(e.ctrlKey || e.metaKey || e.altKey) && t.getAttribute('aria-label') !== 'Message') return false
+  }
+  void A.interrupt(id)
 }
 
 function nextAttention(): void {

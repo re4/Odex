@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { ShieldAlert } from 'lucide-react'
+import { ShieldAlert, ShieldCheck } from 'lucide-react'
 import type { ApprovalDecision, ApprovalRequestParams } from '@shared/index'
 import { useApp, type ServerRequest } from '@/store/app'
 import { MiniDiff } from '@/views/items'
+import '@/styles/approval-extra.css'
 
 function describe(p: ApprovalRequestParams): { title: string; detail: React.ReactNode } {
   const a = p.approval
@@ -95,8 +96,12 @@ export function ApprovalCard({ req }: { req: ServerRequest }) {
   const [showFeedback, setShowFeedback] = useState(false)
   const [command, setCommand] = useState(p.approval.kind === 'exec' ? p.approval.command : '')
   const ref = useRef<HTMLDivElement>(null)
+  const [confirmAlways, setConfirmAlways] = useState(false)
   const { title, detail } = describe(p)
   const decide = (decision: ApprovalDecision) => void resolve(req.id, { decision })
+  // "Always allow <prefix>": approve and persist an allow rule (~/.odex/rules/default.toml)
+  const alwaysPrefix = p.approval.kind === 'exec' && p.approval.prefix.length > 0 ? p.approval.prefix.join(' ') : null
+  const approveAlways = () => void resolve(req.id, { decision: { type: 'approveForSession' }, persist: true })
 
   useEffect(() => {
     ref.current?.focus()
@@ -121,12 +126,18 @@ export function ApprovalCard({ req }: { req: ServerRequest }) {
       role="alertdialog"
       aria-label={title}
       onKeyDown={(e) => {
+        const tag = (e.target as HTMLElement).tagName
         if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
           e.preventDefault()
           decide({ type: 'custom', feedback: feedback || null, command: p.approval.kind === 'exec' && command !== p.approval.command ? command : null })
-        } else if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA' && (e.target as HTMLElement).tagName !== 'INPUT') {
+        } else if (e.key === 'Enter' && tag !== 'TEXTAREA' && tag !== 'INPUT' && tag !== 'BUTTON') {
+          // (a focused button handles Enter itself)
           e.preventDefault()
           decide({ type: 'approve' })
+        } else if (e.key === 'Escape' && confirmAlways) {
+          e.preventDefault()
+          e.stopPropagation()
+          setConfirmAlways(false)
         } else if (e.key === 'Escape') {
           e.preventDefault()
           decide({ type: 'deny', feedback: feedback || null })
@@ -155,6 +166,37 @@ export function ApprovalCard({ req }: { req: ServerRequest }) {
         <button className="btn btn-sm" onClick={() => decide({ type: 'approveForSession' })}>
           {sessionLabel}
         </button>
+        {alwaysPrefix && (
+          <span className="approval-always">
+            <button
+              className={`btn btn-sm ${confirmAlways ? 'active' : ''}`}
+              aria-haspopup="dialog"
+              aria-expanded={confirmAlways}
+              title={`Save a rule so commands starting with “${alwaysPrefix}” run without asking`}
+              onClick={() => setConfirmAlways(!confirmAlways)}
+            >
+              <ShieldCheck size={13} /> Always allow <code>{alwaysPrefix}</code>
+            </button>
+            {confirmAlways && (
+              <div className="approval-confirm" role="dialog" aria-label="Confirm always allow">
+                <div className="small">
+                  Always allow <code>{alwaysPrefix}</code>?
+                </div>
+                <div className="xs subtle">
+                  Adds an allow rule to <code>~/.odex/rules/default.toml</code>: in Auto mode, commands starting with <code>{alwaysPrefix}</code> then run in every thread without asking. Edit or remove it in Settings → Permissions & sandbox.
+                </div>
+                <div className="row" style={{ gap: 6, marginTop: 8 }}>
+                  <button className="btn btn-sm btn-primary" autoFocus onClick={approveAlways}>
+                    Always allow
+                  </button>
+                  <button className="btn btn-sm" onClick={() => setConfirmAlways(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </span>
+        )}
         <button className="btn btn-sm" onClick={() => decide({ type: 'deny', feedback: feedback || null })} title="Esc">
           Deny
         </button>

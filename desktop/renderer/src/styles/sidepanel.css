@@ -1,0 +1,174 @@
+/* Side panel: layouts (split / full width / swapped) and tab drag-reorder. */
+
+.side-panel.side-panel-full {
+  flex: 1;
+  width: auto;
+  border-left: none;
+}
+.side-panel.side-panel-left {
+  border-left: none;
+  border-right: 1px solid var(--border);
+}
+/* tab strip scrolls; the + / layout / close buttons stay put */
+.sp-header {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+.sp-header .sp-tabs {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border-bottom: none;
+  scrollbar-width: none;
+}
+.sp-header .sp-tabs::-webkit-scrollbar {
+  display: none;
+}
+.sp-tabs .tab {
+  padding: 0 8px;
+  gap: 5px;
+  flex: none;
+}
+.sp-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 4px;
+  flex: none;
+  border-left: 1px solid var(--border);
+  height: 100%;
+}
+.sp-tabs .tab[draggable='true'] {
+  cursor: pointer;
+}
+.sp-tabs .tab.sp-drop {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--bg-hover);
+}
+.sp-tabs .tab:active {
+  cursor: grabbing;
+}
+.center-main.chat-hidden {
+  display: none !important;
+}
+/* chat ↔ tabs swap: panel, handle, chat */
+.center-split.swapped > .side-panel {
+  order: 0;
+}
+.center-split.swapped > .resize-h {
+  order: 1;
+}
+.center-split.swapped > .center-main {
+  order: 2;
+}
+
+/* thread summary card (Plan tab) */
+.summary-card {
+  margin: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.summary-card h4 {
+  margin: 10px 0 4px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-subtle);
+}
+.summary-card ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.summary-card li {
+  margin: 2px 0;
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+.summary-card .summary-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.summary-card .summary-file {
+  font-family: var(--font-code);
+  font-size: var(--font-size-xs);
+  background: var(--code-bg);
+  border: none;
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.summary-card .summary-file:hover {
+  text-decoration: underline;
+}
+.plan-section + .summary-card {
+  margin-top: 0;
+}
+
+/* Sources rows: open / save as / reveal */
+.source-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-sm);
+}
+.source-row > .nav-item {
+  min-width: 0;
+}
+.source-row .source-actions {
+  display: none;
+  gap: 2px;
+  flex: none;
+  padding-right: 4px;
+}
+.source-row:hover .source-actions,
+.source-row:focus-within .source-actions {
+  display: inline-flex;
+}
+.source-row:hover .source-when,
+.source-row:focus-within .source-when {
+  display: none;
+}
+
+/* Files: image save, HTML preview */
+.files-image-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.files-image-meta > span {
+  flex: 1;
+  min-width: 0;
+}
+.files-image-save {
+  height: 22px;
+}
+.files-html {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.files-html-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunken);
+}
+.files-html-frame {
+  flex: 1;
+  width: 100%;
+  border: none;
+  /* pages without a background are drawn on white, like a browser */
+  background: #fff;
+}

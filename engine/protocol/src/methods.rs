@@ -113,6 +113,9 @@ pub struct ThreadReadResponse {
     /// The thread's rollout file (JSONL event log) on disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rollout_path: Option<String>,
+    /// The latest compaction summary (thread summary card).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<ContextSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -217,6 +220,9 @@ pub struct GoalSetParams {
     pub time_budget_secs: Option<u32>,
     #[ts(type = "number | null")]
     pub token_budget: Option<u64>,
+    /// Edit the existing goal in place (objective and budgets), keeping its
+    /// progress, instead of starting a new one. A `null` budget removes it.
+    pub edit: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -426,6 +432,13 @@ pub struct ProjectIdParams {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct SuggestPromptsResponse {
+    /// Short starter prompts for the home composer (empty when unavailable).
+    pub prompts: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct TrustParams {
     pub path: String,
     pub trusted: bool,
@@ -591,6 +604,38 @@ pub struct HandoffParams {
     pub commit_message: Option<String>,
 }
 
+/// `worktree/fromLocal`: move a local thread into a new worktree, carrying the local checkout's
+/// uncommitted changes with it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorktreeFromLocalParams {
+    pub thread_id: String,
+    /// Environment for the new worktree (setup script + variables); default: the thread's.
+    pub environment_id: Option<String>,
+    /// Copy instead of move: leave the changes in the local checkout too. By default they are
+    /// stashed there (`git stash` entry "odex: moved to <branch>") once the worktree has them.
+    pub keep_local: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeFromLocalResponse {
+    pub thread: Thread,
+    /// Changed paths carried into the worktree.
+    pub moved_files: u32,
+    /// Stash message in the local checkout holding a copy of the moved changes.
+    pub stash: Option<String>,
+    pub message: String,
+}
+
+/// `worktree/prune`: apply the `[worktrees]` retention policy now.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreePruneResponse {
+    /// Threads whose worktree was removed (each snapshotted to `refs/odex/archived/<thread>`).
+    pub removed: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PrCreateParams {
@@ -600,6 +645,9 @@ pub struct PrCreateParams {
     pub base: Option<String>,
     #[serde(default)]
     pub draft: bool,
+    /// Thread the PR belongs to: its PR summary (badge) is updated.
+    #[serde(default)]
+    pub thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -615,6 +663,9 @@ pub struct PrViewParams {
     pub cwd: String,
     /// PR number; default: the PR for the current branch.
     pub number: Option<u32>,
+    /// Thread whose branch this is: a found PR updates the thread's PR summary.
+    #[serde(default)]
+    pub thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -633,6 +684,45 @@ pub struct PrCommentParams {
     pub body: Option<String>,
     /// Must be true; the UI sets it only after explicit confirmation.
     pub confirmed: bool,
+    /// Review event: `comment` (default), `approve` or `requestChanges`.
+    #[serde(default)]
+    pub event: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrListParams {
+    pub cwd: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrListResponse {
+    pub prs: Vec<PrListItem>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrCheckLogParams {
+    pub cwd: String,
+    /// Check name (for messages).
+    pub name: String,
+    /// Check-run / Actions job id ([`PrCheck::id`]).
+    #[serde(default)]
+    pub check_id: Option<String>,
+    /// Details URL; an Actions job URL also identifies the job.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrCheckLogResponse {
+    /// The check's summary and the tail of its failed log, capped.
+    pub text: String,
+    /// The log was longer than the cap and was cut.
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -706,6 +796,23 @@ pub struct McpReadResourceParams {
 #[serde(rename_all = "camelCase")]
 pub struct McpReadResourceResponse {
     pub contents: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpGetPromptParams {
+    pub server: String,
+    pub name: String,
+    #[serde(default)]
+    pub arguments: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpGetPromptResponse {
+    pub description: Option<String>,
+    /// The prompt's messages flattened to text (what the composer inserts).
+    pub text: String,
 }
 
 // -------------------------------------------------------- skills and plugins
@@ -912,6 +1019,9 @@ pub struct KillSwitchParams {
 #[serde(rename_all = "camelCase")]
 pub struct ContextGetResponse {
     pub context: ContextStatus,
+    /// The latest compaction summary (thread summary card).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<ContextSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

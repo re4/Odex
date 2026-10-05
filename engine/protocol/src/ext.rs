@@ -64,6 +64,18 @@ pub struct McpResourceInfo {
 pub struct McpPromptInfo {
     pub name: String,
     pub description: Option<String>,
+    /// Declared prompt arguments (MCP `prompts/list`).
+    #[serde(default)]
+    pub arguments: Option<Vec<McpPromptArgument>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpPromptArgument {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub required: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -72,6 +84,8 @@ pub enum SkillScope {
     User,
     Project,
     Plugin,
+    /// Shipped with the engine (read-only).
+    Builtin,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

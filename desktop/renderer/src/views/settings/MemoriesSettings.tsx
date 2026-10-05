@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Check, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { Check, Pencil, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 import type { Memory, Project } from '@shared/index'
 import { useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import { confirmDialog } from '@/lib/actions'
-import { Toggle, basename, relativeTime } from '@/components/ui'
+import { Modal, Toggle, basename, relativeTime } from '@/components/ui'
 import { Row } from '@/views/settings/GeneralSettings'
 import { Section, useEngineConfig } from '@/views/settings/ConfigSettings'
 
@@ -154,6 +154,72 @@ function AddMemory({ projects, onAdd }: { projects: Project[]; onAdd: (m: Memory
   )
 }
 
+/** Pick a thread and ask the utility model to propose memories from it (`memory/propose`). */
+function SuggestFromThread({ onClose, onProposed }: { onClose: () => void; onProposed: (m: Memory[]) => void }) {
+  const threads = useApp((s) => s.threads)
+  const order = useApp((s) => s.threadOrder)
+  const projects = useApp((s) => s.projects)
+  const selected = useApp((s) => s.selectedThreadId)
+  const list = useMemo(
+    () =>
+      order
+        .map((id) => threads[id]?.thread)
+        .filter((t): t is NonNullable<typeof t> => !!t && !t.archived && t.kind !== 'subagent')
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, 100),
+    [threads, order],
+  )
+  const [tid, setTid] = useState(() => (selected && list.some((t) => t.id === selected) ? selected : (list[0]?.id ?? '')))
+  const [busy, setBusy] = useState(false)
+  const run = async () => {
+    if (!tid) return
+    setBusy(true)
+    try {
+      const r = await call('memory/propose', { threadId: tid })
+      onProposed(r.memories)
+      // new suggestions also arrive as a `memory/proposed` notification (with its own toast)
+      if (!r.memories.length) toast('No new memories suggested for that thread')
+      onClose()
+    } catch (e) {
+      toast(`Could not suggest memories: ${(e as Error).message}`, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal
+      title="Suggest memories from a thread"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" disabled={!tid || busy} onClick={() => void run()}>
+            {busy ? <span className="spinner" /> : <Sparkles size={13} />} Suggest
+          </button>
+        </>
+      }
+    >
+      <p className="small muted" style={{ marginTop: 0 }}>
+        The utility model reads the thread and proposes short facts about how you work. Nothing is saved until you approve it.
+      </p>
+      {list.length ? (
+        <select className="select" style={{ width: '100%' }} value={tid} onChange={(e) => setTid(e.target.value)} aria-label="Thread to learn from">
+          {list.map((t) => (
+            <option key={t.id} value={t.id}>
+              {(t.name || t.preview || 'Untitled thread').slice(0, 80)}
+              {t.projectId ? ` · ${projects.find((p) => p.id === t.projectId)?.name ?? ''}` : ''}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <div className="small subtle">There are no threads yet.</div>
+      )}
+    </Modal>
+  )
+}
+
 export function MemoriesSettings() {
   const { cfg, write } = useEngineConfig()
   const projects = useApp((s) => s.projects)
@@ -162,6 +228,7 @@ export function MemoriesSettings() {
   const [scopeFilter, setScopeFilter] = useState('all')
   const [catFilter, setCatFilter] = useState('all')
   const [query, setQuery] = useState('')
+  const [suggesting, setSuggesting] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -229,7 +296,18 @@ export function MemoriesSettings() {
         <Row label="Suggest new memories" hint="After a thread ends, the utility model proposes memories. Nothing is saved until you approve it.">
           <Toggle checked={generate} onChange={(v) => void write([{ keyPath: 'memories.generate', value: v }])} label="Suggest new memories" />
         </Row>
+        <Row label="Suggest from a thread" hint="Ask the utility model to propose memories from one thread now.">
+          <button className="btn btn-sm" onClick={() => setSuggesting(true)}>
+            <Sparkles size={13} /> Suggest memories from a thread…
+          </button>
+        </Row>
       </Section>
+      {suggesting && (
+        <SuggestFromThread
+          onClose={() => setSuggesting(false)}
+          onProposed={(ms) => setList((cur) => [...ms, ...(cur ?? []).filter((x) => !ms.some((m) => m.id === x.id))])}
+        />
+      )}
 
       {proposed.length > 0 && (
         <Section title={`Suggestions (${proposed.length})`} desc="Review what the model proposed. Approve, edit or dismiss each one.">

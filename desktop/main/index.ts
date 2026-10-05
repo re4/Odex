@@ -8,7 +8,9 @@ import { odexHome, resourcePath } from './paths'
 import { hasSecret, setSecret } from './secrets'
 import { getSettings, onSettings, setSettings } from './settings'
 import * as terminals from './terminals'
-import { createWindow, mainWindow, setQuitting, showMain, updateTitleBars } from './windows'
+import { openInEditor } from './editor'
+import { createWindow, mainWindow, openQuickChat, setQuitting, showMain, updateTitleBars } from './windows'
+import { handlePreviewProtocol, registerPreviewIpc, registerPreviewScheme } from './preview'
 
 const engine = new EngineHost()
 let tray: Tray | null = null
@@ -22,6 +24,9 @@ let killSwitch = false
 
 // Tests and side-by-side dev runs get their own profile (and lock).
 if (process.env.ODEX_USER_DATA) app.setPath('userData', process.env.ODEX_USER_DATA)
+
+// HTML previews in the Files panel (must be registered before 'ready')
+registerPreviewScheme()
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -73,13 +78,18 @@ function updateTray(): void {
   const all = [...threadStatus.values()]
   const running = all.filter((t) => t.status === 'running' || t.status === 'compacting' || t.status === 'reconnecting').length
   const waiting = all.filter((t) => t.status === 'waitingApproval').length
-  tray.setToolTip(`Odex — ${running} running${waiting ? `, ${waiting} need approval` : ''}`)
+  const usageLabel = usageToday == null ? null : `${formatTokenCount(usageToday)} tokens today`
+  const tooltip = `Odex — ${running} running${waiting ? `, ${waiting} need approval` : ''}${usageLabel ? ` · ${usageLabel}` : ''}`
+  tray.setToolTip(tooltip)
+  // read by the e2e tests (app.evaluate)
+  ;(globalThis as { __odexTray?: unknown }).__odexTray = { tooltip, usageLabel, running, waiting }
   const menu = Menu.buildFromTemplate([
     { label: 'Show Odex', click: () => showMain() },
     { label: 'New thread', click: () => showMain().webContents.send('odex:command', { command: 'newThread' }) },
-    { label: 'Quick chat', click: () => showMain().webContents.send('odex:command', { command: 'quickChat' }) },
+    { label: 'Quick chat', click: () => openQuickChat() },
     { type: 'separator' },
     { label: `Running: ${running}`, enabled: false },
+    ...(usageLabel ? [{ label: `Usage: ${usageLabel}`, enabled: false }] : []),
     { label: `Needs approval: ${waiting}`, enabled: waiting > 0, click: () => showMain().webContents.send('odex:command', { command: 'nextAttention' }) },
     { type: 'separator' },
     { label: killSwitch ? 'Release kill switch' : 'Kill switch (stop computer & browser use)', click: () => void toggleKillSwitch() },
@@ -95,6 +105,34 @@ function updateTray(): void {
     keepAwakeId = null
   }
 }
+
+// Today's local token usage for the tray (refreshed every few minutes and after turns).
+let usageToday: number | null = null
+let usageTimer: ReturnType<typeof setTimeout> | null = null
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+async function refreshTrayUsage(): Promise<void> {
+  if (engine.state !== 'ready') return
+  const d = new Date()
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  try {
+    const r = await engine.request<{ rows: Array<{ date: string; usage: { totalTokens: number } }> }>('usage/stats', { since: today })
+    usageToday = r.rows.filter((x) => x.date === today).reduce((n, x) => n + (x.usage?.totalTokens ?? 0), 0)
+    updateTray()
+  } catch {}
+}
+
+function scheduleTrayUsage(delay = 2000): void {
+  if (usageTimer) clearTimeout(usageTimer)
+  usageTimer = setTimeout(() => void refreshTrayUsage(), delay)
+}
+setInterval(() => void refreshTrayUsage(), 5 * 60_000).unref?.()
 
 async function toggleKillSwitch(force?: boolean): Promise<void> {
   killSwitch = force ?? !killSwitch
@@ -123,14 +161,20 @@ function quit(): void {
 
 // -------------------------------------------------------- engine events
 
-engine.on('state', (s) => broadcast('odex:engine-state', s))
+engine.on('state', (s) => {
+  broadcast('odex:engine-state', s)
+  if (s?.state === 'ready') scheduleTrayUsage(500)
+})
 engine.on('notification', (method: string, params: any) => {
+  // dev-server URLs printed by agent processes open in the browser panel only when enabled
+  if (method === 'openUrl' && params?.source === 'devServer' && !getSettings().openDevServerUrls) return
   broadcast('odex:notification', { method, params })
   if (method === 'thread/updated' || method === 'thread/started') {
     const t = params.thread
     threadStatus.set(t.id, { status: t.status, name: t.name || t.preview || 'Thread' })
     updateTray()
   } else if (method === 'turn/completed') {
+    scheduleTrayUsage()
     const s = getSettings()
     const t = threadStatus.get(params.threadId)
     const pref = s.notifyTurnComplete
@@ -208,8 +252,10 @@ function registerIpc(): void {
 
   ipcMain.handle('settings:get', () => getSettings())
   ipcMain.handle('settings:set', (_e, patch) => setSettings(patch))
-  ipcMain.handle('secrets:set', (_e, key: string, value: string | null) => {
+  ipcMain.handle('secrets:set', async (_e, key: string, value: string | null) => {
     setSecret(key, value)
+    // the running engine picks the change up without a restart (it never logs values)
+    if (engine.state === 'ready') await engine.request('secrets/set', { key, value: value || null }).catch(() => {})
   })
   ipcMain.handle('secrets:has', (_e, key: string) => hasSecret(key))
 
@@ -251,19 +297,28 @@ function registerIpc(): void {
     const r = await dialog.showOpenDialog(w, { properties: ['openFile', 'multiSelections'] })
     return r.canceled ? [] : r.filePaths
   })
+  // save renderer content (e.g. a chat image) where the user picks; the dialog is the approval
+  ipcMain.handle('dialog:saveFile', async (e, opts: { defaultName: string; dataUrl?: string; text?: string }) => {
+    const w = BrowserWindow.fromWebContents(e.sender)!
+    const ext = path.extname(opts.defaultName).slice(1)
+    const r = await dialog.showSaveDialog(w, {
+      defaultPath: path.join(app.getPath('downloads'), path.basename(opts.defaultName)),
+      filters: ext ? [{ name: ext.toUpperCase(), extensions: [ext] }, { name: 'All files', extensions: ['*'] }] : undefined,
+    })
+    if (r.canceled || !r.filePath) return null
+    const m = opts.dataUrl ? /^data:[^;,]*(;base64)?,(.*)$/s.exec(opts.dataUrl) : null
+    const data = m ? (m[1] ? Buffer.from(m[2], 'base64') : Buffer.from(decodeURIComponent(m[2]))) : Buffer.from(opts.text ?? '')
+    await fs.promises.writeFile(r.filePath, data)
+    return r.filePath
+  })
   ipcMain.handle('shell:openExternal', (_e, url: string) => {
     if (/^(https?|mailto):/.test(url)) void shell.openExternal(url)
   })
   ipcMain.handle('shell:openPath', (_e, p: string) => shell.openPath(p))
   ipcMain.handle('shell:showItem', (_e, p: string) => shell.showItemInFolder(p))
-  ipcMain.handle('shell:openInEditor', async (_e, p: string, line?: number) => {
-    const editor = getSettings().editor
-    if (!editor || editor === 'system') return shell.openPath(p)
-    const { spawn } = await import('node:child_process')
-    const arg = editor === 'code' || editor === 'cursor' ? ['-g', line ? `${p}:${line}` : p] : [p]
-    spawn(editor, arg, { shell: true, detached: true, stdio: 'ignore' }).unref()
-    return ''
-  })
+  // command templates (`code -g {file}:{line}`, `vim +{line} {file}`), per-argument quoting and
+  // per-project overrides (Edit project → General) live in editor.ts
+  ipcMain.handle('shell:openInEditor', (_e, p: string, line?: number) => openInEditor(p, line, getSettings(), (m, params) => engine.request(m, params)))
 
   ipcMain.handle('fs:read', async (_e, p: string, maxBytes = 5 * 1024 * 1024) => {
     const st = await fs.promises.stat(p)
@@ -290,9 +345,17 @@ function registerIpc(): void {
   ipcMain.handle('fs:watch', (e, p: string, ignore?: string[]) => fsw.watchPath(e.sender, p, ignore))
   ipcMain.handle('fs:unwatch', (e, p: string) => fsw.unwatchPath(e.sender, p))
 
-  ipcMain.handle('win:new', (_e, threadId?: string) => {
-    createWindow({ threadId, popout: true })
+  ipcMain.handle('win:new', (_e, threadId?: string, panel?: string) => {
+    createWindow({ threadId, popout: true, panel: panel === 'review' ? panel : undefined })
   })
+  ipcMain.handle('win:quickChat', () => {
+    openQuickChat()
+  })
+  // e.g. "Open in Odex" from the Quick Chat window
+  ipcMain.handle('win:openInMain', (_e, threadId: string) => {
+    showMain().webContents.send('odex:command', { command: 'openThread', threadId })
+  })
+  registerPreviewIpc()
   ipcMain.handle('win:alwaysOnTop', (e, on: boolean) => BrowserWindow.fromWebContents(e.sender)?.setAlwaysOnTop(on))
   ipcMain.handle('win:close', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   ipcMain.handle('win:zoom', (e, factor: number) => {
@@ -330,12 +393,18 @@ function registerShortcuts(): void {
       })
     } catch {}
   }
+  if (s.quickChatHotkey) {
+    try {
+      globalShortcut.register(s.quickChatHotkey, () => void openQuickChat())
+    } catch {}
+  }
 }
 
 // -------------------------------------------------------------------- app
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  handlePreviewProtocol()
   registerIpc()
   nativeTheme.on('updated', () => {
     updateTitleBars()

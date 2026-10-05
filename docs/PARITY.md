@@ -183,7 +183,7 @@ Status lives in `docs/PROGRESS.md`. A row that is "keep" is done only when it is
 | Exec policy rules (allow / prompt / forbid prefixes) | keep | | M4 |
 | Hooks with in-app trust review | keep | | M4 |
 | Project trust prompt on new folders | keep | | M4 |
-| Sandbox: Windows restricted token / AppContainer, Linux bwrap/Landlock, macOS Seatbelt | keep | PROMPT §5 | M4 |
+| Sandbox: Windows restricted token / AppContainer, Linux bwrap/Landlock, macOS Seatbelt | keep | PROMPT §5. Windows, Linux bubblewrap and macOS Seatbelt are implemented. **Deferred:** the Landlock fallback for Linux hosts without bwrap (bwrap is the documented requirement; without it the engine falls back to approval-required, never silently unsandboxed) | M4 |
 | Named permission profiles | stretch | Config `[profiles]` covers most of it | — |
 | Managed `requirements.toml` admin pins | cut | Enterprise | — |
 
@@ -297,7 +297,7 @@ Status lives in `docs/PROGRESS.md`. A row that is "keep" is done only when it is
 | Feature | Decision | Reason / notes | MS |
 |---|---|---|---|
 | Computer use on Windows | keep | PROMPT §9. Background-capable via UIA patterns + WGC/PrintWindow (upstream is foreground-only) | M9 |
-| macOS / Linux computer use | keep | After Windows (AX / AT-SPI). Compiles everywhere; feature-gated | M9 |
+| macOS / Linux computer use | keep | **Deferred** to after parity: needs AX (macOS) and AT-SPI (Linux) backends that can't be developed or tested on the Windows build machine. The crate compiles everywhere and returns a clear "unsupported on this platform" error; Windows is complete | M9 |
 | Per-app access (always allow) | keep | | M9 |
 | Kill switch hotkey, takeover indicator, action log with screenshots | add | PROMPT §9 | M9 |
 | Never type into password fields or touch UAC | keep | | M9 |
@@ -327,7 +327,7 @@ Status lives in `docs/PROGRESS.md`. A row that is "keep" is done only when it is
 |---|---|---|---|
 | Appshots (capture window + accessible text) with a hotkey | keep | PROMPT §9 | M9 |
 | Multi-window, per-window state | keep | | M10 |
-| In-app updates | adapt | Optional self-update from GitHub Releases | M10 |
+| In-app updates | adapt | **Deferred** until releases are published: self-update needs a signed release feed (electron-updater + GitHub Releases) and code-signing certificates. Installers are built by CI on tags | M10 |
 | `/feedback` with log upload | cut | No telemetry. "Open logs folder" instead | — |
 | Codex Micro, Voice, Pets, Sites, Dots, Space, Remote control | cut | PROMPT Cut | — |
 | Profile / insight cards / referrals / rate limits / sign-in | cut | PROMPT Cut | — |

@@ -26,4 +26,16 @@ export interface DesktopSettings {
   showReasoning: boolean
   browserHome: string
   zoom: number
+  /** Background color override ('' = theme default). */
+  bgColor: string
+  /** Foreground (text) color override ('' = theme default). */
+  fgColor: string
+  /** OS-wide hotkey that opens the Quick Chat window ('' = off). */
+  quickChatHotkey: string
+  /** Keep the Quick Chat window above other windows. */
+  quickChatOnTop: boolean
+  /** Open local dev-server URLs printed by agent processes and project actions in the browser panel. */
+  openDevServerUrls: boolean
+  /** Per-project editor command overriding `editor`, keyed by project id. */
+  projectEditors: Record<string, string>
 }

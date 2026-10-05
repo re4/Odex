@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, IpcRendererEvent, webUtils } from 'electron'
 
 type Listener<T> = (payload: T) => void
 
@@ -42,8 +42,8 @@ const api = {
     has: (key: string) => ipcRenderer.invoke('secrets:has', key) as Promise<boolean>,
   },
   terminals: {
-    create: (opts: { threadId?: string | null; cwd?: string; shell?: string; cols?: number; rows?: number; title?: string }) => ipcRenderer.invoke('term:create', opts),
-    run: (opts: { threadId?: string | null; cwd: string; command: string; title?: string }) => ipcRenderer.invoke('term:run', opts),
+    create: (opts: { threadId?: string | null; cwd?: string; shell?: string; cols?: number; rows?: number; title?: string; env?: Record<string, string> }) => ipcRenderer.invoke('term:create', opts),
+    run: (opts: { threadId?: string | null; cwd: string; command: string; title?: string; env?: Record<string, string>; detectUrls?: boolean }) => ipcRenderer.invoke('term:run', opts),
     write: (id: string, data: string) => ipcRenderer.invoke('term:write', id, data),
     resize: (id: string, cols: number, rows: number) => ipcRenderer.invoke('term:resize', id, cols, rows),
     kill: (id: string) => ipcRenderer.invoke('term:kill', id),
@@ -72,6 +72,14 @@ const api = {
   dialog: {
     openFolder: (opts?: { multi?: boolean }) => ipcRenderer.invoke('dialog:openFolder', opts) as Promise<string[]>,
     openFiles: () => ipcRenderer.invoke('dialog:openFiles') as Promise<string[]>,
+    /** Save a data URL (or text) to a file the user picks; resolves to the path, or null if cancelled. */
+    saveFile: (opts: { defaultName: string; dataUrl?: string; text?: string }) => ipcRenderer.invoke('dialog:saveFile', opts) as Promise<string | null>,
+    /** "Save as…": copy a file on disk where the user picks; resolves to the new path, or null if cancelled. */
+    saveCopy: (src: string, opts?: { title?: string }) => ipcRenderer.invoke('dialog:saveCopy', src, opts) as Promise<string | null>,
+  },
+  /** Live HTML previews: a sandboxable URL that serves the file and its folder's assets. */
+  preview: {
+    url: (file: string) => ipcRenderer.invoke('preview:url', file) as Promise<string>,
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
@@ -80,6 +88,14 @@ const api = {
     openInEditor: (p: string, line?: number) => ipcRenderer.invoke('shell:openInEditor', p, line),
   },
   fs: {
+    /** Absolute path of a dropped/pasted `File` ('' for in-memory files). Replaces the removed `File.path`. */
+    pathForFile: (file: File): string => {
+      try {
+        return webUtils.getPathForFile(file)
+      } catch {
+        return ''
+      }
+    },
     read: (p: string, maxBytes?: number) => ipcRenderer.invoke('fs:read', p, maxBytes),
     write: (p: string, text: string) => ipcRenderer.invoke('fs:write', p, text) as Promise<number>,
     exists: (p: string) => ipcRenderer.invoke('fs:exists', p) as Promise<boolean>,
@@ -92,7 +108,12 @@ const api = {
     onChange: (cb: Listener<{ path: string; names: string[]; all?: boolean }>) => on('odex:fs-changed', cb),
   },
   win: {
-    newWindow: (threadId?: string) => ipcRenderer.invoke('win:new', threadId),
+    /** Pop-out window for a thread; `panel: 'review'` shows only its review panel (detached review). */
+    newWindow: (threadId?: string, panel?: 'review') => ipcRenderer.invoke('win:new', threadId, panel),
+    /** Open (or focus) the Quick Chat window. */
+    quickChat: () => ipcRenderer.invoke('win:quickChat'),
+    /** Show a thread in the main window. */
+    openInMain: (threadId: string) => ipcRenderer.invoke('win:openInMain', threadId),
     alwaysOnTop: (on: boolean) => ipcRenderer.invoke('win:alwaysOnTop', on),
     close: () => ipcRenderer.invoke('win:close'),
     zoom: (factor: number) => ipcRenderer.invoke('win:zoom', factor),

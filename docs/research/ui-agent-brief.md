@@ -55,3 +55,19 @@ ChatGPT names or assets in code, UI text or docs; paths are `~/.odex/` and `.ode
   (Read tool) to check layout. Fix what looks broken.
 - Do NOT commit; the lead commits. Do not touch files owned by other agents. Report: files changed, engine
   changes, test results, known gaps.
+
+## Round 2 additions (parity gap fixing)
+- The parity audit is in your prompt; the row ids (A3.8, A5.6, …) refer to `docs/PARITY.md` sections.
+- Build the engine into YOUR OWN target dir and point the app at it, so parallel agents don't lock each
+  other's binaries: `cd engine && CARGO_TARGET_DIR=target-<yourname> cargo build -p odex-engine -p odex-mock-vllm`,
+  then run Playwright with `ODEX_ENGINE_BIN=C:/Users/Mirin/Desktop/Odex/engine/target-<yourname>/debug/odex-engine.exe`
+  (the mock binary is found in `engine/target/debug` — it is already built there).
+- Protocol changes: after editing `engine/protocol/src`, regenerate TS with
+  `cd engine && CARGO_TARGET_DIR=target-<yourname> cargo run -q -p odex-protocol --bin odex-codegen -- ../desktop/shared-types/src/generated`.
+  Codegen rewrites the whole folder from the current source, which includes other agents' protocol edits — that's fine.
+  Keep protocol changes additive (new optional fields / new methods); never rename or remove existing ones.
+- Engine shared files (`api.rs`, `registry.rs`, `app-server/src/lib.rs`, `engine.rs`, `turn.rs`, `toolexec.rs`,
+  `config_types.rs`): small Edit insertions only, re-read right before editing.
+- Run the FULL desktop e2e suite at the end (`ODEX_OUT=out-<you> npx playwright test`) to be sure you broke nothing,
+  plus `cargo test --workspace` / clippy / fmt (with your target dir) if you touched the engine.
+- When a row can't reasonably be done, say so in your report with the reason (the lead will mark it deferred).

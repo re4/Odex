@@ -5,4 +5,8 @@ export type PrCommentParams = { cwd: string, number: number, comments: Array<Rev
 /**
  * Must be true; the UI sets it only after explicit confirmation.
  */
-confirmed: boolean, };
+confirmed: boolean, 
+/**
+ * Review event: `comment` (default), `approve` or `requestChanges`.
+ */
+event?: string | null, };

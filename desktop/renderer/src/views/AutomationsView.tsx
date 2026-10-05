@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleMinus, Clock, MessageSquare, Pencil, Play, Plus, Trash2 } from 'lucide-react'
+import { Archive, CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleMinus, Clock, FileText, MessageSquare, Pencil, Play, Plus, Trash2 } from 'lucide-react'
 import type { Automation, AutomationRun, PermissionMode, Project, ReasoningEffort, RunMode, ScheduleValidateResponse, Thread } from '@shared/index'
 import { useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import * as A from '@/lib/actions'
-import { Modal, Toggle, relativeTime } from '@/components/ui'
+import { Menu, Modal, Toggle, relativeTime, type MenuItem } from '@/components/ui'
 import '@/styles/automations.css'
 
 // ---------------------------------------------------------------- shared helpers (also used by ActivityView)
@@ -250,6 +250,68 @@ function SchedulePreview({ schedule, onValid }: { schedule: string; onValid: (va
   )
 }
 
+// ---------------------------------------------------------------- templates
+
+export interface AutomationTemplate {
+  id: string
+  name: string
+  prompt: string
+  schedule: string
+  permissionMode: PermissionMode
+}
+
+/** Ready-made automations ("Use template" in the editor). */
+export const AUTOMATION_TEMPLATES: AutomationTemplate[] = [
+  {
+    id: 'commit-summary',
+    name: 'Daily summary of commits',
+    schedule: '0 9 * * *',
+    permissionMode: 'read-only',
+    prompt:
+      'Summarize the commits from the last 24 hours (git log --since="24 hours ago" --stat). Group them by area, call out risky or large changes, and list anything that looks unfinished. Do not modify any files.',
+  },
+  {
+    id: 'deps',
+    name: 'Dependency update check',
+    schedule: '0 9 * * 1',
+    permissionMode: 'auto',
+    prompt:
+      "Check the project's dependencies for available updates with the package manager's own tool (npm outdated, pip list --outdated, cargo outdated, …). List outdated packages with current and latest versions, flag major-version bumps and known security advisories. Do not change any files.",
+  },
+  {
+    id: 'flaky',
+    name: 'Flaky test triage',
+    schedule: '0 7 * * 1-5',
+    permissionMode: 'auto',
+    prompt:
+      'Run the test suite twice. Report tests that fail in one run but pass in the other (flaky) separately from tests that fail every time, with the likely cause of each and a suggested fix. Do not modify any files.',
+  },
+  {
+    id: 'todo',
+    name: 'TODO sweep',
+    schedule: '0 16 * * 5',
+    permissionMode: 'read-only',
+    prompt:
+      'Find TODO, FIXME and HACK comments in the codebase. Group them by file, mark the ones added in the last week (git log -S or git blame), and suggest the three most valuable ones to tackle next.',
+  },
+  {
+    id: 'changelog',
+    name: 'Changelog draft',
+    schedule: '0 17 * * 5',
+    permissionMode: 'auto',
+    prompt:
+      'Draft a changelog entry for the changes since the last release tag (git describe --tags --abbrev=0). Group the entries under Added, Changed and Fixed, in user-facing language. Write the draft to CHANGELOG_DRAFT.md and do not commit.',
+  },
+  {
+    id: 'nightly-tests',
+    name: 'Nightly test run',
+    schedule: '0 2 * * *',
+    permissionMode: 'auto',
+    prompt:
+      'Run the full test suite and the linter. If everything passes, reply with a one-line summary. If something fails, list each failure with its file and line, the error, and a suggested fix. Do not modify any files.',
+  },
+]
+
 // ---------------------------------------------------------------- editor
 
 function Seg<T extends string>(props: { value: T; options: Array<{ id: T; label: string }>; onChange: (v: T) => void; label: string }) {
@@ -289,6 +351,19 @@ function AutomationEditor({ initial, onClose, onSaved }: { initial: Automation |
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [schedOk, setSchedOk] = useState(false)
+  const [templateAnchor, setTemplateAnchor] = useState<HTMLElement | null>(null)
+
+  const applyTemplate = (tpl: AutomationTemplate) => {
+    setName(tpl.name)
+    setPrompt(tpl.prompt)
+    setSched(parseSched(tpl.schedule))
+    setPerm(tpl.permissionMode)
+    setTarget('project')
+  }
+  const templateItems: MenuItem[] = [
+    { label: 'Templates', header: true },
+    ...AUTOMATION_TEMPLATES.map((tpl) => ({ label: tpl.name, icon: <FileText size={13} />, onSelect: () => applyTemplate(tpl) })),
+  ]
 
   const schedule = buildSchedule(sched)
   const project: Project | undefined = projects.find((p) => p.id === projectId)
@@ -367,7 +442,15 @@ function AutomationEditor({ initial, onClose, onSaved }: { initial: Automation |
         </div>
 
         <div className="field">
-          <label htmlFor="ae-prompt">Prompt</label>
+          <div className="row" style={{ alignItems: 'flex-end' }}>
+            <label htmlFor="ae-prompt" className="grow">
+              Prompt
+            </label>
+            <button className="btn btn-sm btn-ghost" aria-haspopup="menu" aria-expanded={!!templateAnchor} onClick={(e) => setTemplateAnchor(templateAnchor ? null : e.currentTarget)}>
+              <FileText size={13} /> Use template <ChevronDown size={12} />
+            </button>
+            {templateAnchor && <Menu anchor={templateAnchor} items={templateItems} onClose={() => setTemplateAnchor(null)} align="right" minWidth={230} />}
+          </div>
           <textarea id="ae-prompt" className="textarea" rows={4} value={prompt} placeholder="What should Odex do on each run?" onChange={(e) => setPrompt(e.target.value)} />
         </div>
 
@@ -578,8 +661,22 @@ function RunHistory({ automation }: { automation: Automation }) {
         <div className="section-title">Prompt</div>
         <div className="selectable small">{automation.prompt}</div>
       </div>
-      <div className="section-title" style={{ margin: '12px 0 4px' }}>
-        Run history
+      <div className="row" style={{ margin: '12px 0 4px', alignItems: 'center' }}>
+        <div className="section-title grow">Run history</div>
+        {runs && runs.some((r) => !r.archived && r.status !== 'running') && (
+          <button
+            className="btn btn-sm btn-ghost"
+            title="Archive every finished run of this automation (they leave Activity)"
+            onClick={async () => {
+              const ids = runs.filter((r) => !r.archived && r.status !== 'running').map((r) => r.id)
+              if (!(await A.confirmDialog('Archive all runs', `Archive ${ids.length} run${ids.length === 1 ? '' : 's'} of “${automation.name}”? They stay in the run history, marked archived.`, 'Archive'))) return
+              await archiveRuns(ids)
+              setRuns((cur) => (cur ?? []).map((r) => (ids.includes(r.id) ? { ...r, archived: true, unread: false } : r)))
+            }}
+          >
+            <Archive size={13} /> Archive all runs
+          </button>
+        )}
       </div>
       {runs === null ? (
         <div className="row small muted" style={{ padding: 8 }}>

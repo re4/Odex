@@ -144,9 +144,21 @@ fn parse_resource(v: &Value) -> Option<McpResourceInfo> {
 }
 
 fn parse_prompt(v: &Value) -> Option<McpPromptInfo> {
+    let arguments = v.get("arguments").and_then(Value::as_array).map(|a| {
+        a.iter()
+            .filter_map(|x| {
+                Some(odex_protocol::McpPromptArgument {
+                    name: x.get("name").and_then(Value::as_str)?.to_string(),
+                    description: x.get("description").and_then(Value::as_str).map(str::to_string),
+                    required: x.get("required").and_then(Value::as_bool),
+                })
+            })
+            .collect()
+    });
     Some(McpPromptInfo {
         name: v.get("name").and_then(Value::as_str)?.to_string(),
         description: v.get("description").and_then(Value::as_str).map(str::to_string),
+        arguments,
     })
 }
 
@@ -1107,6 +1119,16 @@ async fn conn_event_loop(inner: Weak<Inner>, server: Weak<Server>, gen: u64, mut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_arguments_are_parsed() {
+        let p = parse_prompt(&json!({"name": "greet", "arguments": [{"name": "who", "description": "Name", "required": true}, {"x": 1}]}))
+            .unwrap();
+        let args = p.arguments.unwrap();
+        assert_eq!(args.len(), 1);
+        assert_eq!((args[0].name.as_str(), args[0].required), ("who", Some(true)));
+        assert!(parse_prompt(&json!({"name": "bare"})).unwrap().arguments.is_none());
+    }
 
     #[test]
     fn tool_filters() {

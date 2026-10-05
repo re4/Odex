@@ -2,7 +2,7 @@
 //! portable-pty when unsandboxed, piped stdio inside the sandbox otherwise.
 //! Sessions can be listed and killed from the UI.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -14,6 +14,63 @@ use regex::Regex;
 use odex_protocol::ExecSessionInfo;
 
 const MAX_BUFFER: usize = 2 * 1024 * 1024;
+
+/// Called with each new local dev-server URL a session prints (once per port).
+pub type UrlHook = Arc<dyn Fn(String) + Send + Sync>;
+
+/// A hook that asks the client to open dev-server URLs in its in-app browser
+/// (`openUrl`, target `inApp`, source `devServer`).
+pub fn dev_url_hook(emitter: crate::events::Emitter) -> UrlHook {
+    Arc::new(move |url| {
+        emitter.raw(
+            odex_protocol::notification::OPEN_URL,
+            &odex_protocol::OpenUrlNotification { url, target: "inApp".into(), source: Some("devServer".into()) },
+        )
+    })
+}
+
+static DEV_URL: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})(?:/[^\s'"<>()\[\]`]*)?"#).unwrap()
+});
+
+/// Local dev-server URLs (`localhost`, `127.0.0.1`, `0.0.0.0`, `[::1]` with a port) in `text`,
+/// as `(port, url)`. `0.0.0.0` and `[::]` become `localhost` so the URL can be opened.
+pub fn dev_server_urls(text: &str) -> Vec<(u16, String)> {
+    let clean = strip_ansi(text);
+    DEV_URL
+        .captures_iter(&clean)
+        .filter_map(|c| {
+            let port: u16 = c.get(1)?.as_str().parse().ok()?;
+            let url = c.get(0)?.as_str().trim_end_matches(['.', ',', ';', ':']).to_string();
+            let url = url.replacen("0.0.0.0", "localhost", 1).replacen("[::]", "localhost", 1);
+            Some((port, url))
+        })
+        .collect()
+}
+
+/// Line-buffered URL detection for one session.
+struct UrlScan {
+    hook: UrlHook,
+    partial: String,
+    seen: HashSet<u16>,
+}
+
+impl UrlScan {
+    fn feed(&mut self, s: &str) {
+        self.partial.push_str(s);
+        let complete = match self.partial.rfind('\n') {
+            Some(i) => self.partial.drain(..=i).collect::<String>(),
+            // a very long line without a newline: scan what we have
+            None if self.partial.len() > 4096 => std::mem::take(&mut self.partial),
+            None => return,
+        };
+        for (port, url) in dev_server_urls(&complete) {
+            if self.seen.insert(port) {
+                (self.hook)(url);
+            }
+        }
+    }
+}
 
 enum Input {
     Pty(Mutex<Box<dyn Write + Send>>),
@@ -31,6 +88,7 @@ pub struct Session {
     input: Input,
     killer: Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
     notify: tokio::sync::Notify,
+    urls: Mutex<Option<UrlScan>>,
 }
 
 impl Session {
@@ -39,6 +97,9 @@ impl Session {
     }
 
     fn append(&self, s: &str) {
+        if let Some(scan) = self.urls.lock().unwrap().as_mut() {
+            scan.feed(s);
+        }
         let mut b = self.buffer.lock().unwrap();
         b.push_str(s);
         if b.len() > MAX_BUFFER {
@@ -114,14 +175,42 @@ impl Session {
     }
 
     pub async fn kill(&self) {
+        let (pid, pty) = {
+            let i = self.info.lock().unwrap();
+            (i.pid, matches!(self.input, Input::Pty(_)))
+        };
+        // the PTY child is the shell: stop what it started too (dev servers, watchers)
+        if let (Some(pid), true) = (pid, pty) {
+            kill_tree(pid).await;
+        }
         if let Some(k) = self.killer.lock().unwrap().as_mut() {
             let _ = k.kill();
         }
         if let Input::Piped(p) = &self.input {
             p.lock().await.kill();
         }
-        self.set_exit(self.info.lock().unwrap().exit_code);
+        // (not `set_exit(self.info.lock()…)`: the guard would still be held inside set_exit)
+        let code = self.info.lock().unwrap().exit_code;
+        self.set_exit(code);
     }
+}
+
+/// Kill a process and its descendants (best effort).
+async fn kill_tree(pid: u32) {
+    let mut cmd = if cfg!(windows) {
+        let mut c = tokio::process::Command::new("taskkill");
+        c.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        c
+    } else {
+        // PTY children lead their own process group
+        let mut c = tokio::process::Command::new("kill");
+        c.args(["-KILL", "--", &format!("-{pid}")]);
+        c
+    };
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    let _ = tokio::time::timeout(Duration::from_secs(5), cmd.status()).await;
 }
 
 #[derive(Default)]
@@ -137,6 +226,8 @@ pub struct StartSpec {
     pub env: HashMap<String, String>,
     /// `Some` = run inside the sandbox (piped stdio), `None` = PTY.
     pub sandbox: Option<odex_sandbox::ExecRequest>,
+    /// Told about local dev-server URLs the process prints (once per port).
+    pub on_url: Option<UrlHook>,
 }
 
 impl Sessions {
@@ -187,6 +278,7 @@ impl Sessions {
             exit_code: None,
             started_at: chrono::Utc::now().timestamp_millis(),
         };
+        let mut urls = spec.on_url.clone().map(|hook| UrlScan { hook, partial: String::new(), seen: HashSet::new() });
         let session = match spec.sandbox {
             Some(mut req) => {
                 req.argv = spec.argv.clone();
@@ -207,6 +299,7 @@ impl Sessions {
                     input: Input::Piped(proc.clone()),
                     killer: Mutex::new(None),
                     notify: tokio::sync::Notify::new(),
+                    urls: Mutex::new(urls.take()),
                 });
                 let s2 = s.clone();
                 tokio::spawn(async move {
@@ -258,6 +351,7 @@ impl Sessions {
                     input: Input::Pty(Mutex::new(writer)),
                     killer: Mutex::new(Some(killer)),
                     notify: tokio::sync::Notify::new(),
+                    urls: Mutex::new(urls.take()),
                 });
                 let s2 = s.clone();
                 let master = pair.master;
@@ -301,6 +395,60 @@ pub fn strip_ansi(s: &str) -> String {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn kill_stops_a_running_session() {
+        let sessions = Sessions::default();
+        let cmd = if cfg!(windows) { "Start-Sleep -Seconds 60" } else { "sleep 60" };
+        let s = sessions
+            .start(StartSpec {
+                thread_id: Some("t".into()),
+                command: cmd.into(),
+                argv: odex_sandbox::shell_argv(&odex_config::default_shell(), cmd),
+                cwd: std::env::temp_dir(),
+                env: Default::default(),
+                sandbox: None,
+                on_url: None,
+            })
+            .await
+            .unwrap();
+        assert!(s.running());
+        tokio::time::timeout(Duration::from_secs(15), sessions.kill(&s.id)).await.expect("kill returns (no deadlock)");
+        assert!(!s.running());
+        assert!(!sessions.list(Some("t"))[0].running);
+    }
+
+    #[test]
+    fn detects_dev_server_urls_once_per_port() {
+        let vite =
+            "  \x1b[32m➜\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[39m\r\n";
+        assert_eq!(dev_server_urls(vite), vec![(5173, "http://localhost:5173/".to_string())]);
+        assert_eq!(
+            dev_server_urls("Listening on http://0.0.0.0:8080, docs at https://example.com:443/x"),
+            vec![(8080, "http://localhost:8080".to_string())]
+        );
+        assert_eq!(
+            dev_server_urls("see http://127.0.0.1:3000/app?x=1."),
+            vec![(3000, "http://127.0.0.1:3000/app?x=1".into())]
+        );
+        assert!(dev_server_urls("http://localhost/ without a port").is_empty());
+
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let g2 = got.clone();
+        let mut scan = UrlScan {
+            hook: Arc::new(move |u| g2.lock().unwrap().push(u)),
+            partial: String::new(),
+            seen: HashSet::new(),
+        };
+        // split across chunks, repeated, then a second port
+        scan.feed("server at http://local");
+        scan.feed("host:4000/ ready\n");
+        scan.feed("http://localhost:4000/ again\nhttp://localhost:4001\n");
+        assert_eq!(
+            *got.lock().unwrap(),
+            vec!["http://localhost:4000/".to_string(), "http://localhost:4001".to_string()]
+        );
+    }
+
     #[test]
     fn ansi() {
         assert_eq!(strip_ansi("\x1b[31mred\x1b[0m\r\n\x1b]0;title\x07ok"), "red\nok");
@@ -318,6 +466,7 @@ mod tests {
                 cwd: std::env::temp_dir(),
                 env: Default::default(),
                 sandbox: None,
+                on_url: None,
             })
             .await
             .unwrap();
