@@ -3,4 +3,4 @@
 /**
  * Coordinate convention a vision model uses when it points at things.
  */
-export type CoordinateSpace = "pixels" | "normalized1000" | "normalized1";
+export type CoordinateSpace = "pixels" | "normalized_1000" | "normalized_1";

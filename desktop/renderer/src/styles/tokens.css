@@ -1,0 +1,86 @@
+/* Odex design tokens. Every component uses these variables so themes,
+   accent colors, fonts and density switch globally. */
+:root {
+  --accent: #4f6bed;
+  --accent-contrast: #ffffff;
+  --font-ui: Inter, 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-code: 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  --font-size: 13px;
+  --font-size-sm: calc(var(--font-size) - 1.5px);
+  --font-size-xs: calc(var(--font-size) - 2.5px);
+  --font-size-lg: calc(var(--font-size) + 2px);
+  --radius: 8px;
+  --radius-sm: 5px;
+  --radius-lg: 12px;
+  --space: 8px;
+  --row-h: 30px;
+  --titlebar-h: 38px;
+  --transition: 120ms ease;
+
+  /* light theme */
+  --bg: #fbfbfd;
+  --bg-elev: #ffffff;
+  --bg-sunken: #f2f3f7;
+  --bg-hover: rgba(30, 40, 80, 0.06);
+  --bg-active: rgba(30, 40, 80, 0.1);
+  --bg-selected: color-mix(in srgb, var(--accent) 12%, transparent);
+  --fg: #1d2030;
+  --fg-muted: #5c6175;
+  --fg-subtle: #8a8fa3;
+  --border: #e4e6ee;
+  --border-strong: #cfd2de;
+  --shadow: 0 1px 2px rgba(20, 25, 50, 0.06), 0 4px 16px rgba(20, 25, 50, 0.08);
+  --shadow-lg: 0 8px 40px rgba(20, 25, 50, 0.18);
+  --code-bg: #f4f5f9;
+  --success: #1f9d55;
+  --warning: #c27c0e;
+  --danger: #d0353f;
+  --info: #2f7fd1;
+  --add-bg: rgba(31, 157, 85, 0.12);
+  --add-fg: #16794a;
+  --del-bg: rgba(208, 53, 63, 0.11);
+  --del-fg: #b02a33;
+  --scrollbar: rgba(30, 40, 80, 0.18);
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg: #16171c;
+  --bg-elev: #1d1f26;
+  --bg-sunken: #121318;
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.09);
+  --bg-selected: color-mix(in srgb, var(--accent) 22%, transparent);
+  --fg: #e6e7ec;
+  --fg-muted: #a2a6b4;
+  --fg-subtle: #737889;
+  --border: #2a2d36;
+  --border-strong: #3a3e4a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.55);
+  --code-bg: #111217;
+  --success: #3ccf7f;
+  --warning: #f0b23a;
+  --danger: #f2626b;
+  --info: #5aa7f5;
+  --add-bg: rgba(60, 207, 127, 0.13);
+  --add-fg: #6fe0a2;
+  --del-bg: rgba(242, 98, 107, 0.14);
+  --del-fg: #ff9aa0;
+  --scrollbar: rgba(255, 255, 255, 0.16);
+  color-scheme: dark;
+}
+
+:root[data-density='compact'] {
+  --space: 6px;
+  --row-h: 26px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion='on']) {
+    --transition: 0ms;
+  }
+}
+:root[data-motion='off'] {
+  --transition: 0ms;
+}

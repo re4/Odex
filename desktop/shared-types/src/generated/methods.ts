@@ -102,18 +102,22 @@ import type { ProviderTestResult } from "./ProviderTestResult";
 import type { ProviderUpsertParams } from "./ProviderUpsertParams";
 import type { ProvidersNotification } from "./ProvidersNotification";
 import type { QueueNotification } from "./QueueNotification";
+import type { QueueSetParams } from "./QueueSetParams";
 import type { ReviewStartParams } from "./ReviewStartParams";
 import type { SandboxStatus } from "./SandboxStatus";
 import type { ScheduleValidateParams } from "./ScheduleValidateParams";
 import type { ScheduleValidateResponse } from "./ScheduleValidateResponse";
 import type { SecretsStoreParams } from "./SecretsStoreParams";
 import type { SetEnabledParams } from "./SetEnabledParams";
+import type { ShellCommandParams } from "./ShellCommandParams";
 import type { SkillImportParams } from "./SkillImportParams";
 import type { SkillReadResponse } from "./SkillReadResponse";
 import type { SkillWriteParams } from "./SkillWriteParams";
 import type { SkillsListParams } from "./SkillsListParams";
 import type { SkillsListResponse } from "./SkillsListResponse";
 import type { SourcesNotification } from "./SourcesNotification";
+import type { TerminalReadParams } from "./TerminalReadParams";
+import type { TerminalReadResponse } from "./TerminalReadResponse";
 import type { ThreadArchiveParams } from "./ThreadArchiveParams";
 import type { ThreadCompactParams } from "./ThreadCompactParams";
 import type { ThreadForkParams } from "./ThreadForkParams";
@@ -155,6 +159,9 @@ export interface ClientRequestMap {
   "thread/unarchive": { params: ThreadIdParams; result: ThreadResponse };
   "thread/delete": { params: ThreadIdParams; result: EmptyResponse };
   "thread/rollback": { params: ThreadRollbackParams; result: ThreadReadResponse };
+  "thread/revert": { params: ThreadRollbackParams; result: ThreadReadResponse };
+  "thread/queue/set": { params: QueueSetParams; result: EmptyResponse };
+  "thread/shellCommand": { params: ShellCommandParams; result: EmptyResponse };
   "thread/update": { params: ThreadUpdateParams; result: ThreadResponse };
   "thread/compact": { params: ThreadCompactParams; result: EmptyResponse };
   "thread/context": { params: ThreadIdParams; result: ContextGetResponse };
@@ -276,6 +283,7 @@ export interface ServerRequestMap {
   "elicitation/request": { params: ElicitationRequestParams; result: ElicitationResponse };
   "browser/execute": { params: BrowserExecuteParams; result: BrowserExecuteResponse };
   "secrets/store": { params: SecretsStoreParams; result: EmptyResponse };
+  "terminal/read": { params: TerminalReadParams; result: TerminalReadResponse };
 }
 
 export type ClientMethod = keyof ClientRequestMap;

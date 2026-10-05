@@ -177,7 +177,7 @@ impl Store {
         }
         let c = self.conn.lock().unwrap();
         let mut stmt = c.prepare(
-            "SELECT f.thread_id, f.field, snippet(thread_fts, 2, '[', ']', '…', 12), t.title, t.updated_at
+            "SELECT f.thread_id, f.field, snippet(thread_fts, 2, '[[', ']]', '…', 12), t.title, t.updated_at
              FROM thread_fts f JOIN threads t ON t.id = f.thread_id
              WHERE thread_fts MATCH ?1 AND t.archived = 0
              ORDER BY bm25(thread_fts) LIMIT ?2",

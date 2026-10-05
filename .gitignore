@@ -21,3 +21,5 @@ Thumbs.db
 # local runtime
 .odex-dev-home/
 *.log
+
+/desktop/e2e/debug/
