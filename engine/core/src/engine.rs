@@ -126,7 +126,16 @@ impl Engine {
 
     /// Reload config from disk (after edits) and push it to the registry.
     pub fn reload_config(&self) -> anyhow::Result<()> {
-        let profile = self.config.read().unwrap().active_profile.clone();
+        // A profile picked on the command line sticks; one picked by the
+        // file's `profile` key follows the file (so switching it works).
+        let profile = {
+            let c = self.config.read().unwrap();
+            if c.active_profile != c.user.profile {
+                c.active_profile.clone()
+            } else {
+                None
+            }
+        };
         let stack = ConfigStack::load(&self.home, profile.as_deref())?;
         self.registry.update_settings(stack.resolve(None));
         *self.config.write().unwrap() = stack;
@@ -144,6 +153,51 @@ impl Engine {
 
     pub fn is_trusted(&self, p: &Path) -> bool {
         self.config.read().unwrap().is_trusted(p)
+    }
+
+    /// Evaluate a command against the exec policy for a thread: the user's
+    /// `~/.odex/rules/` plus `.odex/rules/` of the thread's (trusted) project
+    /// or worktree. Project rules are read fresh so edits apply immediately.
+    pub fn exec_policy_eval(
+        &self,
+        t: &Thread,
+        command: &str,
+        shell: odex_execpolicy::ShellKind,
+    ) -> odex_execpolicy::Evaluation {
+        let dirs = self.project_rule_dirs(t);
+        if dirs.is_empty() {
+            return self.policy.read().unwrap().evaluate(command, shell);
+        }
+        let mut all = vec![self.home.rules_dir()];
+        all.extend(dirs);
+        let (policy, warnings) = odex_execpolicy::Policy::load(&all);
+        for w in warnings {
+            tracing::warn!("exec policy: {w}");
+        }
+        policy.evaluate(command, shell)
+    }
+
+    fn project_rule_dirs(&self, t: &Thread) -> Vec<PathBuf> {
+        // (folder holding .odex/rules, folder whose trust governs it)
+        let mut cands: Vec<(PathBuf, PathBuf)> = Vec::new();
+        if let Some(wt) = &t.worktree {
+            cands.push((PathBuf::from(&wt.path), PathBuf::from(&wt.repo_root)));
+        }
+        cands.push((PathBuf::from(&t.cwd), PathBuf::from(&t.cwd)));
+        if let Some(pid) = &t.project_id {
+            if let Ok(p) = self.project(pid) {
+                let root = PathBuf::from(p.primary_folder());
+                cands.push((root.clone(), root));
+            }
+        }
+        let mut out: Vec<PathBuf> = Vec::new();
+        for (dir, trust_root) in cands {
+            let rules = dir.join(".odex").join("rules");
+            if rules.is_dir() && !out.contains(&rules) && (self.is_trusted(&trust_root) || self.is_trusted(&dir)) {
+                out.push(rules);
+            }
+        }
+        out
     }
 
     // ------------------------------------------------------------- threads

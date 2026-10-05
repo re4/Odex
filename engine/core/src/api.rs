@@ -1476,9 +1476,25 @@ pub fn skills_list(engine: &Engine, p: SkillsListParams) -> SkillsListResponse {
     SkillsListResponse { skills: crate::skills::list(engine, root.as_deref(), &s) }
 }
 
-pub fn skills_read(engine: &Engine, p: NameParams) -> EResult<SkillReadResponse> {
+/// Find a skill by name: user and plugin skills first, then the skills of
+/// every known (trusted) project.
+fn find_skill_anywhere(engine: &Engine, name: &str) -> Option<(SkillInfo, String)> {
     let s = engine.user_settings();
-    let (skill, body) = crate::skills::find(engine, None, &s, &p.name).ok_or_else(|| bad("skill not found"))?;
+    if let Some(found) = crate::skills::find(engine, None, &s, name) {
+        return Some(found);
+    }
+    for pr in engine.store.projects().ok()? {
+        let root = Path::new(pr.primary_folder());
+        let s = engine.settings_for(Some(root));
+        if let Some(found) = crate::skills::find(engine, Some(root), &s, name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+pub fn skills_read(engine: &Engine, p: NameParams) -> EResult<SkillReadResponse> {
+    let (skill, body) = find_skill_anywhere(engine, &p.name).ok_or_else(|| bad("skill not found"))?;
     Ok(SkillReadResponse { skill, body })
 }
 
@@ -1502,8 +1518,7 @@ pub fn skills_write(engine: &Engine, p: SkillWriteParams) -> EResult<SkillReadRe
 }
 
 pub fn skills_delete(engine: &Engine, p: NameParams) -> EResult<EmptyResponse> {
-    let s = engine.user_settings();
-    let (skill, _) = crate::skills::find(engine, None, &s, &p.name).ok_or_else(|| bad("skill not found"))?;
+    let (skill, _) = find_skill_anywhere(engine, &p.name).ok_or_else(|| bad("skill not found"))?;
     if skill.scope == SkillScope::Plugin {
         return Err(bad("plugin skills are removed with their plugin"));
     }
@@ -1663,7 +1678,10 @@ pub fn automation_delete(engine: &Engine, p: IdParams) -> EResult<EmptyResponse>
 }
 
 pub fn automation_run_now(engine: &Engine, p: IdParams) -> EResult<EmptyResponse> {
-    let a = astore(engine)?.get(&p.id).ok_or_else(|| bad("automation not found"))?;
+    let store = astore(engine)?;
+    let a = store.get(&p.id).ok_or_else(|| bad("automation not found"))?;
+    // a manual run counts as the latest run (next_run_at stays the next future slot)
+    let _ = store.mark_started(&p.id, chrono::Local::now());
     let e2 = engine.clone();
     tokio::spawn(async move { crate::background::run_automation(&e2, a).await });
     Ok(EmptyResponse {})

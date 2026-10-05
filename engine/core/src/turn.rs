@@ -481,7 +481,17 @@ async fn run_compaction(
 ) -> bool {
     let t = rt.thread();
     let s = engine.thread_settings(&t).context;
-    if ctx.plan_compaction((window as f64 * s.keep_recent_ratio) as u32).is_none() {
+    if ctx.plan_compaction(odex_context::keep_recent_for(window, &s, trigger)).is_none() {
+        if trigger == CompactionTrigger::Manual {
+            notice(
+                engine,
+                rt,
+                turn_id,
+                NoticeLevel::Info,
+                "Nothing to compact yet: the conversation is already short.",
+                None,
+            );
+        }
         return false; // nothing old enough to summarize
     }
     let item_id = new_id("item");

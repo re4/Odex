@@ -17,10 +17,11 @@
     "gen:types": "cd ../engine && cargo run -q -p odex-protocol --bin odex-codegen -- ../desktop/shared-types/src/generated",
     "build:engine": "cd ../engine && cargo build --release -p odex-engine -p odex-mock-vllm",
     "test:e2e": "playwright test",
-    "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win nsis msix",
-    "dist:mac": "npm run build && electron-builder --mac dmg",
-    "dist:linux": "npm run build && electron-builder --linux AppImage deb"
+    "prepare:engine": "node scripts/prepare-engine.mjs",
+    "dist": "npm run prepare:engine && npm run build && electron-builder --publish never",
+    "dist:win": "npm run prepare:engine && npm run build && electron-builder --win nsis appx --publish never",
+    "dist:mac": "npm run prepare:engine && npm run build && electron-builder --mac dmg --publish never",
+    "dist:linux": "npm run prepare:engine && npm run build && electron-builder --linux AppImage deb --publish never"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.0",

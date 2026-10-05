@@ -616,6 +616,15 @@ pub struct CompactionOutcome {
     pub summarized_entries: usize,
 }
 
+/// Tokens kept verbatim by a compaction. A manual `/compact` summarizes
+/// everything but the latest exchange; automatic ones keep `keep_recent_ratio`.
+pub fn keep_recent_for(window: u32, s: &ContextSettings, trigger: CompactionTrigger) -> u32 {
+    match trigger {
+        CompactionTrigger::Manual => 0,
+        _ => (window as f64 * s.keep_recent_ratio) as u32,
+    }
+}
+
 /// Tier 2 compaction. `target` is the post-compaction token goal.
 #[allow(clippy::too_many_arguments)]
 pub async fn compact(
@@ -630,7 +639,7 @@ pub async fn compact(
 ) -> Option<CompactionOutcome> {
     let before = state.estimate(p);
     let target = (window as f64 * s.target_after_compact) as u32;
-    let mut keep_recent = (window as f64 * s.keep_recent_ratio) as u32;
+    let mut keep_recent = keep_recent_for(window, s, trigger);
     let mut attempts = 0;
     let mut any_llm = false;
     let mut summarized_total = 0;

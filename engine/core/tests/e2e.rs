@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use odex_mock_vllm::{MockCall, MockReply};
+use odex_mock_vllm::{MockCall, MockReply, RecordedRequest};
 use odex_protocol::*;
 use serde_json::json;
 
@@ -319,4 +319,42 @@ async fn recall_finds_earlier_history() {
         .map(odex_mock_vllm::RecordedRequest::message_text)
         .collect();
     assert!(tool_msgs.iter().any(|t| t.contains("ZEBRA-4412")), "{tool_msgs:?}");
+}
+
+#[tokio::test]
+async fn project_rules_from_dot_odex_apply() {
+    let h = harness(32768, "").await;
+    let rules = h.work.path().join(".odex").join("rules");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(
+        rules.join("project.toml"),
+        "[[rule]]\nprefix = [\"echo\", \"forbidden-marker\"]\ndecision = \"forbid\"\njustification = \"project says no\"\n",
+    )
+    .unwrap();
+    h.server.push_all([
+        MockReply::ToolCalls {
+            calls: vec![MockCall {
+                name: "shell".into(),
+                arguments: json!({"command": "echo forbidden-marker"}),
+                raw_arguments: None,
+            }],
+            text: None,
+        },
+        MockReply::text("understood"),
+    ]);
+    let tid = h.thread(PermissionMode::FullAccess).await;
+    let turn = h.run(&tid, "run it").await;
+    assert_eq!(turn.status, TurnStatus::Completed);
+    let reqs = h.server.requests();
+    let tool_msg = reqs
+        .last()
+        .unwrap()
+        .messages()
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(RecordedRequest::message_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(tool_msg.contains("forbidden by policy"), "tool result: {tool_msg}");
+    assert!(tool_msg.contains("project says no"), "tool result: {tool_msg}");
 }

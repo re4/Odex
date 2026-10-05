@@ -9,6 +9,7 @@ node_modules/
 /desktop/out/
 /desktop/out-*/
 /desktop/release/
+/desktop/build/bin/
 /desktop/test-results/
 /desktop/playwright-report/
 *.tsbuildinfo

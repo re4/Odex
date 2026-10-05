@@ -349,7 +349,7 @@ async fn approve_exec(
 ) -> Result<(bool, Option<String>, Option<String>), ToolOutcome> {
     let s = &o.tctx.settings;
     let t = o.rt.thread();
-    let eval = o.engine.policy.read().unwrap().evaluate(command, shell_kind(s));
+    let eval = o.engine.exec_policy_eval(&t, command, shell_kind(s));
     let argv_list = eval.commands.clone().unwrap_or_default();
     let session_allows = o.rt.session_allow.lock().unwrap().allows_command(&argv_list);
     let plan = approval::plan_exec(&ExecCtx {

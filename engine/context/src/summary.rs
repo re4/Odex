@@ -374,12 +374,30 @@ pub fn clip_middle(s: &str, n: usize) -> String {
 /// plan, files touched, last errors. A thread never stops because of context.
 pub fn extractive(entries: &[HistoryEntry], previous: Option<&SummaryData>, plan: &[PlanItem]) -> SummaryData {
     let mut s = previous.cloned().unwrap_or_default();
+    // The first request is the task (kept nearly whole); later messages are
+    // kept as short gists. The list is bounded so repeated fallbacks can't
+    // grow the summary (verbatim requirements are re-added separately).
+    const FIRST_CHARS: usize = 2000;
+    const GIST_CHARS: usize = 300;
+    const MAX_GOALS: usize = 12;
+    const MAX_TOTAL_CHARS: usize = 6000;
     for e in entries.iter().filter(|e| e.is_user()) {
         let t = e.text();
         let t = t.trim();
-        if !t.is_empty() && !s.goal_and_requirements.iter().any(|g| g == t) {
-            s.goal_and_requirements.push(clip(t, 4000));
+        if t.is_empty() {
+            continue;
         }
+        let item = clip(t, if s.goal_and_requirements.is_empty() { FIRST_CHARS } else { GIST_CHARS });
+        if !s.goal_and_requirements.iter().any(|g| g == &item || g == t) {
+            s.goal_and_requirements.push(item);
+        }
+    }
+    // keep the first (the task) and the most recent gists
+    while s.goal_and_requirements.len() > MAX_GOALS
+        || (s.goal_and_requirements.len() > 1
+            && s.goal_and_requirements.iter().map(|g| g.len()).sum::<usize>() > MAX_TOTAL_CHARS)
+    {
+        s.goal_and_requirements.remove(1);
     }
     if !plan.is_empty() {
         s.plan = plan.to_vec();
@@ -475,6 +493,28 @@ mod tests {
         let s = extractive(&es, None, &[]);
         assert_eq!(s.goal_and_requirements, vec!["REQ: keep it fast"]);
         assert!(s.next_steps[0].contains("Working on it"));
+    }
+
+    #[test]
+    fn extractive_stays_bounded_across_fallbacks() {
+        let task = format!("TASK: {}", "build the thing ".repeat(50));
+        let mut prev: Option<SummaryData> = None;
+        for round in 0..30 {
+            let mut es = Vec::new();
+            if round == 0 {
+                es.push(HistoryEntry::new("t", 0, EntryKind::User, ChatMessage::user(task.clone())));
+            }
+            for i in 0..3 {
+                let msg = format!("round {round} follow-up {i}: {}", "more detail ".repeat(200));
+                es.push(HistoryEntry::new("t", round, EntryKind::User, ChatMessage::user(msg)));
+            }
+            prev = Some(extractive(&es, prev.as_ref(), &[]));
+        }
+        let s = prev.unwrap();
+        assert!(s.goal_and_requirements.len() <= 12);
+        assert!(s.goal_and_requirements.iter().map(|g| g.len()).sum::<usize>() <= 6000 + 2000);
+        assert!(s.goal_and_requirements[0].starts_with("TASK:"), "the task is kept first");
+        assert!(s.goal_and_requirements.last().unwrap().starts_with("round 29"), "latest gist kept");
     }
 
     #[test]
