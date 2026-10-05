@@ -71,7 +71,7 @@ The tests:
 4. `mcp_round_trip`: calls `calc.add` on `odex-mcp-test-server`. Build it first with `cargo build -p odex-mcp-client --bins`; the test is skipped otherwise.
 5. `small_window_compacts_without_overflow`: overrides the window to 4,096 tokens and sends log chunks until at least one compaction happens, then two more turns. It checks there are no overflow errors and the context stays within the window.
 
-The suite has been verified against `odex-mock-vllm` with a rules file. It has **not yet run against a real server**: `http://192.168.50.220:8080/v1` was still unreachable (curl timed out after 5 s; the suite fails fast with "not reachable").
+The suite has been verified against `odex-mock-vllm` with a rules file. It has **not yet run against a real server**: the vLLM test endpoint on the developer's LAN was unreachable from the build machine (the suite fails fast with "not reachable").
 
 **exec smoke.** `odex-engine --home <empty dir> --base-url http://host:8000/v1 exec "Create hello.txt containing 'hello from odex', then print it with a shell command." --auto-approve` (see `docs/vllm-setup.md`).
 
@@ -101,7 +101,7 @@ A full audit of every keep/adapt/add row in `docs/PARITY.md` (205 rows) found 70
 - Model-change warnings are re-checked for loaded threads after an endpoint refresh; other threads are checked when opened or on their next turn.
 - The computer-use part of the `@` menu lists real desktop windows, so it isn't e2e-tested.
 
-- The real vLLM endpoint provided for testing (`http://192.168.50.220:8080/v1`) has been unreachable from this machine since the session started (connect timeout, ping fails). The machine is on the same LAN (192.168.50.40), but a full-tunnel VPN interface ("desktop", routes 0.0.0.0/1 + 128.0.0.0/1) captures the traffic, and ARP for the host is incomplete. Everything so far is tested against the mock. Re-run `odex-engine --base-url http://192.168.50.220:8080/v1 doctor` when it is reachable.
+- The real vLLM endpoint provided for testing (on the developer's LAN) was unreachable from the build machine: a full-tunnel VPN routed LAN traffic into the tunnel. Everything so far is tested against the mock. Run `odex-engine --base-url http://<host>:<port>/v1 doctor` and the real-vLLM smoke suite once a server is reachable.
 - The restricted-token sandbox doesn't isolate the network (D-017). Some tools that spawn children inside the sandbox (e.g. node `child_process`) fail with EPERM; the engine offers a retry without the sandbox.
 - MCP OAuth tokens are stored in a JSON file in `~/.odex`, not via `safeStorage` (D-022).
 - Linux/macOS sandbox and computer-use paths are compile-checked only (no runtime test on this machine). CI is the first place they run: the Linux job installs bubblewrap and lifts Ubuntu's unprivileged-userns restriction for bwrap, headless Chrome and Electron.

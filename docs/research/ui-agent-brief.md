@@ -1,6 +1,6 @@
 # Brief for desktop UI work (shared by parallel agents)
 
-Repo: `C:\Users\Mirin\Desktop\Odex`. Odex is a self-hosted coding-agent desktop app (feature clone of a
+Repo: the repository root. Odex is a self-hosted coding-agent desktop app (feature clone of a
 well-known coding desktop app, limited to coding, MCP and PC control) running on vLLM. Read `PROMPT.md`
 (spec) and the relevant rows of `docs/PARITY.md` for the features in your area. Never use OpenAI / Codex /
 ChatGPT names or assets in code, UI text or docs; paths are `~/.odex/` and `.odex/`.
@@ -60,7 +60,7 @@ ChatGPT names or assets in code, UI text or docs; paths are `~/.odex/` and `.ode
 - The parity audit is in your prompt; the row ids (A3.8, A5.6, …) refer to `docs/PARITY.md` sections.
 - Build the engine into YOUR OWN target dir and point the app at it, so parallel agents don't lock each
   other's binaries: `cd engine && CARGO_TARGET_DIR=target-<yourname> cargo build -p odex-engine -p odex-mock-vllm`,
-  then run Playwright with `ODEX_ENGINE_BIN=C:/Users/Mirin/Desktop/Odex/engine/target-<yourname>/debug/odex-engine.exe`
+  then run Playwright with `ODEX_ENGINE_BIN=<repo>/engine/target-<yourname>/debug/odex-engine.exe` (absolute path)
   (the mock binary is found in `engine/target/debug` — it is already built there).
 - Protocol changes: after editing `engine/protocol/src`, regenerate TS with
   `cd engine && CARGO_TARGET_DIR=target-<yourname> cargo run -q -p odex-protocol --bin odex-codegen -- ../desktop/shared-types/src/generated`.
