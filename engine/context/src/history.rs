@@ -236,7 +236,19 @@ mod tests {
         ];
         let out = normalize_for_template(msgs);
         let roles: Vec<Role> = out.iter().map(|m| m.role).collect();
-        assert_eq!(roles, vec![Role::System, Role::User, Role::Assistant, Role::User, Role::Assistant, Role::Tool, Role::Tool, Role::User]);
+        assert_eq!(
+            roles,
+            vec![
+                Role::System,
+                Role::User,
+                Role::Assistant,
+                Role::User,
+                Role::Assistant,
+                Role::Tool,
+                Role::Tool,
+                Role::User
+            ]
+        );
         assert!(out[3].text_content().contains('a') && out[3].text_content().contains('b'));
         assert_eq!(out[6].tool_call_id.as_deref(), Some("2"));
         assert!(out[7].text_content().contains("orphan") && out[7].text_content().contains("late"));
@@ -245,7 +257,14 @@ mod tests {
     #[test]
     fn groups_keep_tool_results_with_calls() {
         let mk = |k| HistoryEntry::new("t", 0, k, ChatMessage::user("x"));
-        let es = vec![mk(EntryKind::User), mk(EntryKind::Assistant), mk(EntryKind::ToolResult), mk(EntryKind::ToolResult), mk(EntryKind::Assistant), mk(EntryKind::User)];
+        let es = vec![
+            mk(EntryKind::User),
+            mk(EntryKind::Assistant),
+            mk(EntryKind::ToolResult),
+            mk(EntryKind::ToolResult),
+            mk(EntryKind::Assistant),
+            mk(EntryKind::User),
+        ];
         assert_eq!(group_starts(&es), vec![0, 1, 4, 5]);
     }
 }

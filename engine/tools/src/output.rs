@@ -52,7 +52,12 @@ pub fn cap(text: &str, max_chars: usize, out_ref: Option<&str>) -> Capped {
     }
     let omitted = lines.len() - head.len() - tail.len();
     let marker = marker(omitted, 0, out_ref);
-    Capped { text: format!("{}\n{marker}\n{}", head.join("\n"), tail.join("\n")), truncated: true, omitted_lines: omitted, total_lines }
+    Capped {
+        text: format!("{}\n{marker}\n{}", head.join("\n"), tail.join("\n")),
+        truncated: true,
+        omitted_lines: omitted,
+        total_lines,
+    }
 }
 
 fn marker(lines: usize, chars: usize, out_ref: Option<&str>) -> String {
@@ -67,7 +72,7 @@ pub fn fmt_num(n: usize) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -97,7 +102,9 @@ impl OutputStore {
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
                 let n = e.file_name().to_string_lossy().to_string();
-                if let Some(num) = n.strip_prefix("out_").and_then(|r| r.strip_suffix(".txt")).and_then(|x| x.parse::<u64>().ok()) {
+                if let Some(num) =
+                    n.strip_prefix("out_").and_then(|r| r.strip_suffix(".txt")).and_then(|x| x.parse::<u64>().ok())
+                {
                     max = max.max(num);
                 }
             }

@@ -53,7 +53,9 @@ pub fn args_summary(tool: &str, args: &Value) -> String {
             x
         }
         "edit_file" | "write_file" | "view_image" | "list_dir" => s("path"),
-        "grep" => format!("{} in {}", clip(&s("pattern"), 80), if s("path").is_empty() { ".".into() } else { s("path") }),
+        "grep" => {
+            format!("{} in {}", clip(&s("pattern"), 80), if s("path").is_empty() { ".".into() } else { s("path") })
+        }
         "glob" => s("pattern"),
         "read_output" => s("ref"),
         "recall" | "search_tools" => clip(&s("query"), 100),
@@ -61,7 +63,11 @@ pub fn args_summary(tool: &str, args: &Value) -> String {
             let p = s("patch");
             let files: Vec<&str> = p
                 .lines()
-                .filter_map(|l| l.strip_prefix("*** Update File: ").or_else(|| l.strip_prefix("*** Add File: ")).or_else(|| l.strip_prefix("*** Delete File: ")))
+                .filter_map(|l| {
+                    l.strip_prefix("*** Update File: ")
+                        .or_else(|| l.strip_prefix("*** Add File: "))
+                        .or_else(|| l.strip_prefix("*** Delete File: "))
+                })
                 .collect();
             clip(&files.join(", "), 160)
         }
@@ -87,7 +93,11 @@ pub fn load_image_data_url(path: &std::path::Path, max_px: u32) -> Result<(Strin
 /// Downscale a PNG/JPEG data URL (or raw bytes) to `max_px`.
 pub fn downscale_png(bytes: &[u8], max_px: u32) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
-    let img = if img.width().max(img.height()) > max_px { img.resize(max_px, max_px, image::imageops::FilterType::Triangle) } else { img };
+    let img = if img.width().max(img.height()) > max_px {
+        img.resize(max_px, max_px, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
     let mut buf = std::io::Cursor::new(Vec::new());
     img.write_to(&mut buf, image::ImageFormat::Png).map_err(|e| e.to_string())?;
     Ok(buf.into_inner())
@@ -112,7 +122,10 @@ mod tests {
     fn summaries() {
         assert_eq!(args_summary("read_file", &json!({"path":"a.rs","offset":10,"limit":20})), "a.rs:10+20");
         assert_eq!(
-            args_summary("apply_patch", &json!({"patch":"*** Begin Patch\n*** Update File: x.rs\n*** Add File: y.rs\n*** End Patch"})),
+            args_summary(
+                "apply_patch",
+                &json!({"patch":"*** Begin Patch\n*** Update File: x.rs\n*** Add File: y.rs\n*** End Patch"})
+            ),
             "x.rs, y.rs"
         );
     }

@@ -274,10 +274,62 @@ pub fn search_tools() -> ToolSpec {
     )
 }
 
+/// Windows at or below this size get the compact prompt and toolset.
+pub const SMALL_WINDOW: u32 = 8192;
+
+/// Short-description toolset for small context windows (≤ [`SMALL_WINDOW`]):
+/// shell, read, edit, write, plan, plus recall/read_output for the context engine.
+pub fn compact(windows: bool) -> Vec<ToolSpec> {
+    let shell_name = if windows { "PowerShell" } else { "bash" };
+    vec![
+        spec(
+            "shell",
+            &format!("Run a {shell_name} command (sandboxed; set escalated=true to ask for more access)."),
+            json!({"type": "object", "properties": {
+                "command": {"type": "string"}, "workdir": {"type": "string"}, "timeout_ms": {"type": "integer"},
+                "escalated": {"type": "boolean"}, "justification": {"type": "string"}
+            }, "required": ["command"]}),
+        ),
+        spec(
+            "read_file",
+            "Read a file (numbered lines; use offset/limit for more).",
+            json!({"type": "object", "properties": {"path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["path"]}),
+        ),
+        spec(
+            "edit_file",
+            "Replace exact text old_string with new_string (empty old_string creates the file).",
+            json!({"type": "object", "properties": {"path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["path", "old_string", "new_string"]}),
+        ),
+        spec(
+            "write_file",
+            "Create or overwrite a file.",
+            json!({"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}),
+        ),
+        spec(
+            "update_plan",
+            "Set the task plan (steps with status pending/in_progress/completed).",
+            json!({"type": "object", "properties": {"plan": {"type": "array", "items": {"type": "object", "properties": {
+                "step": {"type": "string"}, "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}}, "required": ["step", "status"]}}}, "required": ["plan"]}),
+        ),
+        spec(
+            "recall",
+            "Search earlier (compacted) history for exact details.",
+            json!({"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
+        ),
+        spec(
+            "read_output",
+            "Read a stored full output by ref (ref:out_N).",
+            json!({"type": "object", "properties": {"ref": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["ref"]}),
+        ),
+    ]
+}
+
 /// Built-in tools for a profile, in a fixed order.
 pub fn builtin(profile: ToolProfile, windows: bool) -> Vec<ToolSpec> {
     match profile {
-        ToolProfile::Codex => vec![shell(windows), exec_command(), write_stdin(), apply_patch(), update_plan(), view_image()],
+        ToolProfile::Codex => {
+            vec![shell(windows), exec_command(), write_stdin(), apply_patch(), update_plan(), view_image()]
+        }
         ToolProfile::Minimal => vec![shell(windows), read_file(), edit_file(), update_plan()],
         ToolProfile::Extended => vec![
             shell(windows),
@@ -333,8 +385,14 @@ mod tests {
         assert_eq!(names(ToolProfile::Codex).len(), 6);
         assert_eq!(names(ToolProfile::Extended).len(), 14);
         // deterministic serialization
-        let a = serde_json::to_string(&builtin(ToolProfile::Extended, true).iter().map(|t| t.to_wire()).collect::<Vec<_>>()).unwrap();
-        let b = serde_json::to_string(&builtin(ToolProfile::Extended, true).iter().map(|t| t.to_wire()).collect::<Vec<_>>()).unwrap();
+        let a = serde_json::to_string(
+            &builtin(ToolProfile::Extended, true).iter().map(|t| t.to_wire()).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let b = serde_json::to_string(
+            &builtin(ToolProfile::Extended, true).iter().map(|t| t.to_wire()).collect::<Vec<_>>(),
+        )
+        .unwrap();
         assert_eq!(a, b);
     }
 }

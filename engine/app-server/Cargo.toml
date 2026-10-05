@@ -1,7 +1,21 @@
 [package]
 name = "odex-app-server"
+description = "Odex app-server: JSON-RPC 2.0 over stdio between the engine and the desktop UI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+odex-protocol.workspace = true
+odex-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+odex-config.workspace = true
+odex-mock-vllm.workspace = true
+tempfile.workspace = true

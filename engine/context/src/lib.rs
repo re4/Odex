@@ -238,7 +238,8 @@ impl ContextState {
                 continue;
             }
             let text = e.text();
-            let stub = format!("{}\n[image removed to save context; it showed the result of the step above]", text.trim());
+            let stub =
+                format!("{}\n[image removed to save context; it showed the result of the step above]", text.trim());
             e.msg.content = vec![ContentPart::Text { text: stub.trim().to_string() }];
             e.tokens = est.message(&e.msg);
         }
@@ -396,10 +397,10 @@ impl ContextState {
                 break;
             }
             let e = &mut self.entries[i];
-            if e.turn_index < cutoff_turn || (aggressive && i < protect_from) {
-                if Self::stub(e, est, "output pruned to save context") {
-                    rep.stubbed += 1;
-                }
+            if (e.turn_index < cutoff_turn || (aggressive && i < protect_from))
+                && Self::stub(e, est, "output pruned to save context")
+            {
+                rep.stubbed += 1;
             }
         }
         // 2. superseded file reads (read again later, or written after)
@@ -407,7 +408,11 @@ impl ContextState {
             for i in 0..protect_from {
                 let Some(path) = self.entries[i].tool.as_ref().and_then(|t| t.file_read.clone()) else { continue };
                 let superseded = self.entries[i + 1..].iter().any(|later| {
-                    later.tool.as_ref().map(|t| t.file_read.as_deref() == Some(&path) || t.file_writes.contains(&path)).unwrap_or(false)
+                    later
+                        .tool
+                        .as_ref()
+                        .map(|t| t.file_read.as_deref() == Some(&path) || t.file_writes.contains(&path))
+                        .unwrap_or(false)
                 });
                 if superseded && Self::stub(&mut self.entries[i], est, "superseded by a later read/edit of this file") {
                     rep.stubbed += 1;
@@ -419,15 +424,24 @@ impl ContextState {
             let n = self.entries.len();
             for i in 0..protect_from.min(n) {
                 let Some(t) = self.entries[i].tool.clone() else { continue };
-                let later_same = self.entries[i + 1..].iter().any(|l| l.tool.as_ref().map(|lt| lt.fingerprint == t.fingerprint).unwrap_or(false));
+                let later_same = self.entries[i + 1..]
+                    .iter()
+                    .any(|l| l.tool.as_ref().map(|lt| lt.fingerprint == t.fingerprint).unwrap_or(false));
                 let later_fail = !t.success
                     && self.entries[i + 1..]
                         .iter()
                         .any(|l| l.tool.as_ref().map(|lt| lt.call_fingerprint == t.call_fingerprint).unwrap_or(false));
-                if later_same && Self::stub(&mut self.entries[i], est, "duplicate of a later identical result") {
-                    rep.stubbed += 1;
-                } else if later_fail && Self::stub(&mut self.entries[i], est, "earlier attempt of a repeated call") {
-                    rep.stubbed += 1;
+                let why = if later_same {
+                    Some("duplicate of a later identical result")
+                } else if later_fail {
+                    Some("earlier attempt of a repeated call")
+                } else {
+                    None
+                };
+                if let Some(why) = why {
+                    if Self::stub(&mut self.entries[i], est, why) {
+                        rep.stubbed += 1;
+                    }
                 }
             }
         }
@@ -439,7 +453,10 @@ impl ContextState {
         // 5. old reasoning
         if over(self) || aggressive {
             for e in self.entries.iter_mut() {
-                if e.kind == EntryKind::Assistant && e.msg.reasoning.is_some() && (aggressive || e.turn_index < p.current_turn) {
+                if e.kind == EntryKind::Assistant
+                    && e.msg.reasoning.is_some()
+                    && (aggressive || e.turn_index < p.current_turn)
+                {
                     e.msg.reasoning = None;
                     e.tokens = est.message(&e.msg);
                     rep.reasoning_dropped += 1;
@@ -484,7 +501,9 @@ impl ContextState {
             }
         }
         // Prefer starting the kept region at a user turn boundary.
-        if let Some(u) = (split..self.entries.len()).find(|&i| self.entries[i].kind == EntryKind::User && starts.contains(&i)) {
+        if let Some(u) =
+            (split..self.entries.len()).find(|&i| self.entries[i].kind == EntryKind::User && starts.contains(&i))
+        {
             if u < self.entries.len() {
                 split = u;
             }
@@ -538,7 +557,9 @@ impl ContextState {
                 "trim",
                 0,
                 EntryKind::Nudge,
-                ChatMessage::user("[Older conversation was trimmed to fit the context window. Use recall(query) to search it.]"),
+                ChatMessage::user(
+                    "[Older conversation was trimmed to fit the context window. Use recall(query) to search it.]",
+                ),
             );
             let mut note = note;
             note.tokens = p.estimator.message(&note.msg);
@@ -558,12 +579,8 @@ impl ContextState {
             if self.estimate(p) <= target {
                 return;
             }
-            let Some((idx, _)) = self
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| !e.pinned)
-                .max_by_key(|(_, e)| e.tokens)
+            let Some((idx, _)) =
+                self.entries.iter().enumerate().filter(|(_, e)| !e.pinned).max_by_key(|(_, e)| e.tokens)
             else {
                 return;
             };
@@ -631,26 +648,30 @@ pub async fn compact(
                 }
             }
             let mut kept = kept_pinned;
-            kept.extend(state.entries.drain(..));
+            kept.append(&mut state.entries);
             (sum, kept)
         };
         summarized_total += summarized.len();
         let previous = state.summary.clone();
         let plan = p.pinned.plan.clone();
         let (data, llm) = match summarizer {
-            Some(sm) => match summarize_entries(sm, previous.as_ref().map(|x| &x.data), &summarized, focus, &state.requirements).await {
-                Ok(mut d) => {
-                    d.ensure_requirements(&state.requirements);
-                    if let Some(prev) = &previous {
-                        d.ensure_requirements(&prev.data.goal_and_requirements);
+            Some(sm) => {
+                match summarize_entries(sm, previous.as_ref().map(|x| &x.data), &summarized, focus, &state.requirements)
+                    .await
+                {
+                    Ok(mut d) => {
+                        d.ensure_requirements(&state.requirements);
+                        if let Some(prev) = &previous {
+                            d.ensure_requirements(&prev.data.goal_and_requirements);
+                        }
+                        (d, true)
                     }
-                    (d, true)
+                    Err(e) => {
+                        tracing::warn!("compactor failed, using extractive summary: {e:#}");
+                        (summary::extractive(&summarized, previous.as_ref().map(|x| &x.data), &plan), false)
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!("compactor failed, using extractive summary: {e:#}");
-                    (summary::extractive(&summarized, previous.as_ref().map(|x| &x.data), &plan), false)
-                }
-            },
+            }
             None => (summary::extractive(&summarized, previous.as_ref().map(|x| &x.data), &plan), false),
         };
         let mut data = data;

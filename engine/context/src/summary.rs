@@ -116,22 +116,38 @@ impl SummaryData {
         s.decisions = typed::<Decision>(obj, "decisions").unwrap_or_default();
         s.decisions.retain(|d| !d.decision.is_empty());
         if s.decisions.is_empty() {
-            s.decisions = strings("decisions").into_iter().filter(|d| !d.starts_with('{')).map(|d| Decision { decision: d, reason: String::new() }).collect();
+            s.decisions = strings("decisions")
+                .into_iter()
+                .filter(|d| !d.starts_with('{'))
+                .map(|d| Decision { decision: d, reason: String::new() })
+                .collect();
         }
         s.plan = typed::<PlanItem>(obj, "plan").unwrap_or_default();
         s.plan.retain(|p| !p.step.is_empty());
         if s.plan.is_empty() {
-            s.plan = strings("plan").into_iter().filter(|p| !p.starts_with('{')).map(|p| PlanItem { step: p, status: "pending".into() }).collect();
+            s.plan = strings("plan")
+                .into_iter()
+                .filter(|p| !p.starts_with('{'))
+                .map(|p| PlanItem { step: p, status: "pending".into() })
+                .collect();
         }
         s.files_changed = typed::<FileState>(obj, "files_changed").unwrap_or_default();
         s.files_changed.retain(|f| !f.path.is_empty());
         if s.files_changed.is_empty() {
-            s.files_changed = strings("files_changed").into_iter().filter(|p| !p.starts_with('{')).map(|p| FileState { path: p, ..Default::default() }).collect();
+            s.files_changed = strings("files_changed")
+                .into_iter()
+                .filter(|p| !p.starts_with('{'))
+                .map(|p| FileState { path: p, ..Default::default() })
+                .collect();
         }
         s.commands_and_tests = typed::<CommandResult>(obj, "commands_and_tests").unwrap_or_default();
         s.commands_and_tests.retain(|c| !c.command.is_empty());
         if s.commands_and_tests.is_empty() {
-            s.commands_and_tests = strings("commands_and_tests").into_iter().filter(|c| !c.starts_with('{')).map(|c| CommandResult { command: c, result: String::new() }).collect();
+            s.commands_and_tests = strings("commands_and_tests")
+                .into_iter()
+                .filter(|c| !c.starts_with('{'))
+                .map(|c| CommandResult { command: c, result: String::new() })
+                .collect();
         }
         if s.is_empty() {
             return None;
@@ -180,7 +196,16 @@ impl SummaryData {
         section(
             &mut s,
             "Decisions",
-            self.decisions.iter().map(|d| if d.reason.is_empty() { d.decision.clone() } else { format!("{} — because {}", d.decision, d.reason) }).collect(),
+            self.decisions
+                .iter()
+                .map(|d| {
+                    if d.reason.is_empty() {
+                        d.decision.clone()
+                    } else {
+                        format!("{} — because {}", d.decision, d.reason)
+                    }
+                })
+                .collect(),
         );
         section(
             &mut s,
@@ -220,7 +245,13 @@ impl SummaryData {
             "Commands and tests (latest results)",
             self.commands_and_tests
                 .iter()
-                .map(|c| if c.result.is_empty() { format!("`{}`", c.command) } else { format!("`{}` → {}", c.command, c.result) })
+                .map(|c| {
+                    if c.result.is_empty() {
+                        format!("`{}`", c.command)
+                    } else {
+                        format!("`{}` → {}", c.command, c.result)
+                    }
+                })
                 .collect(),
         );
         section(&mut s, "Open errors", self.open_errors.clone());
@@ -231,7 +262,14 @@ impl SummaryData {
 }
 
 fn normalize(s: &str) -> String {
-    s.trim().trim_matches('"').trim_matches('“').trim_matches('”').split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    s.trim()
+        .trim_matches('"')
+        .trim_matches('“')
+        .trim_matches('”')
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 pub const COMPACTOR_SYSTEM: &str = "You compress a coding agent's working history into a precise handoff summary. \
@@ -249,7 +287,12 @@ Rules:\n\
 Be specific and terse. Prefer exact names, numbers and paths over prose. Output JSON only.";
 
 /// Build the compactor's user message.
-pub fn compactor_user_prompt(previous: Option<&str>, transcript: &str, focus: Option<&str>, must_keep: &[String]) -> String {
+pub fn compactor_user_prompt(
+    previous: Option<&str>,
+    transcript: &str,
+    focus: Option<&str>,
+    must_keep: &[String],
+) -> String {
     let mut s = String::new();
     if let Some(p) = previous {
         s.push_str("## Previous summary (merge it into the new one; keep everything still relevant)\n");
@@ -361,8 +404,20 @@ pub fn extractive(entries: &[HistoryEntry], previous: Option<&SummaryData>, plan
                 commands.push(CommandResult { command: t.args_summary.clone(), result });
             }
             if !t.success {
-                let first = e.text().lines().rev().find(|l| l.to_lowercase().contains("error")).unwrap_or("").trim().to_string();
-                errors.push(format!("{} [{}] failed{}", t.tool, t.args_summary, if first.is_empty() { String::new() } else { format!(": {}", clip(&first, 200)) }));
+                let first = e
+                    .text()
+                    .lines()
+                    .rev()
+                    .find(|l| l.to_lowercase().contains("error"))
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                errors.push(format!(
+                    "{} [{}] failed{}",
+                    t.tool,
+                    t.args_summary,
+                    if first.is_empty() { String::new() } else { format!(": {}", clip(&first, 200)) }
+                ));
             }
             if let Some(r) = &t.output_ref {
                 if !s.important_refs.contains(r) && s.important_refs.len() < 40 {
@@ -405,7 +460,8 @@ mod tests {
 
     #[test]
     fn ensure_requirements_adds_missing() {
-        let mut s = SummaryData { goal_and_requirements: vec!["\"Use tabs, not spaces\"".into()], ..Default::default() };
+        let mut s =
+            SummaryData { goal_and_requirements: vec!["\"Use tabs, not spaces\"".into()], ..Default::default() };
         s.ensure_requirements(&["Use tabs, not spaces".into(), "Never touch the db folder".into()]);
         assert_eq!(s.goal_and_requirements.len(), 2);
     }

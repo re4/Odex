@@ -7,7 +7,12 @@ fn settings() -> ContextSettings {
 }
 
 fn sys() -> SystemParts {
-    SystemParts { base: "You are Odex.".into(), extra: "cwd: /x".into(), agents_md: "# AGENTS\nuse tabs".into(), memories: String::new() }
+    SystemParts {
+        base: "You are Odex.".into(),
+        extra: "cwd: /x".into(),
+        agents_md: "# AGENTS\nuse tabs".into(),
+        memories: String::new(),
+    }
 }
 
 struct Fixture {
@@ -58,7 +63,8 @@ fn tool_step(st: &mut ContextState, f: &Fixture, turn: u32, tool: &str, args: &s
         call_fingerprint: hash(&(tool, args)),
     };
     st.push(
-        HistoryEntry::new(&format!("t{turn}"), turn, EntryKind::ToolResult, ChatMessage::tool_result(id, tool, output)).with_tool(meta),
+        HistoryEntry::new(&format!("t{turn}"), turn, EntryKind::ToolResult, ChatMessage::tool_result(id, tool, output))
+            .with_tool(meta),
         &f.est,
         2,
     );
@@ -134,7 +140,7 @@ fn prune_superseded_reads_and_duplicates() {
     let texts: Vec<String> = st.entries.iter().filter(|e| e.kind == EntryKind::ToolResult).map(|e| e.text()).collect();
     assert!(texts[0].contains("superseded"), "{}", texts[0]);
     assert!(texts[1].contains("duplicate"), "{}", texts[1]);
-    assert!(!st.entries.iter().filter(|e| e.kind == EntryKind::ToolResult).last().unwrap().stubbed);
+    assert!(!st.entries.iter().rfind(|e| e.kind == EntryKind::ToolResult).unwrap().stubbed);
 }
 
 #[test]

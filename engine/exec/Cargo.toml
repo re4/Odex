@@ -1,7 +1,17 @@
 [package]
 name = "odex-exec"
+description = "Headless `odex-engine exec`: run one task non-interactively (tests, CI, debugging)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+odex-protocol.workspace = true
+odex-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+tracing.workspace = true

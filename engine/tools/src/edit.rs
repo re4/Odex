@@ -30,7 +30,9 @@ pub fn resolve(cwd: &Path, p: &str) -> PathBuf {
 }
 
 pub fn display_path(cwd: &Path, p: &Path) -> String {
-    p.strip_prefix(cwd).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_else(|_| p.to_string_lossy().to_string())
+    p.strip_prefix(cwd)
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| p.to_string_lossy().to_string())
 }
 
 /// Unified diff with additions/deletions counts.
@@ -68,16 +70,29 @@ fn loose(s: &str) -> String {
 }
 
 /// Plan an `edit_file` without writing.
-pub fn plan_edit(cwd: &Path, path: &str, old_string: &str, new_string: &str, replace_all: bool) -> Result<PlannedWrite, String> {
+pub fn plan_edit(
+    cwd: &Path,
+    path: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> Result<PlannedWrite, String> {
     let full = resolve(cwd, path);
     if old_string.is_empty() {
         if full.exists() {
             let cur = std::fs::read_to_string(&full).unwrap_or_default();
             if !cur.trim().is_empty() {
-                return Err(format!("{path} already exists; old_string must not be empty when editing an existing file"));
+                return Err(format!(
+                    "{path} already exists; old_string must not be empty when editing an existing file"
+                ));
             }
         }
-        return Ok(PlannedWrite { change: change(cwd, &full, None, new_string), path: full, old: None, new: new_string.to_string() });
+        return Ok(PlannedWrite {
+            change: change(cwd, &full, None, new_string),
+            path: full,
+            old: None,
+            new: new_string.to_string(),
+        });
     }
     let raw = std::fs::read_to_string(&full).map_err(|e| format!("cannot read {path}: {e}"))?;
     let has_bom = raw.starts_with(BOM);
