@@ -82,12 +82,30 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+const IS_WIN = window.odex?.platform === 'win32'
+
 /** Popular local servers to start from (adapted "recommended servers"). */
-const TEMPLATES: Array<{ id: string; label: string; command: string; args: string[]; hint: string }> = [
+const TEMPLATES: Array<{ id: string; label: string; command: string; args: string[]; hint: string; startupSecs?: number }> = [
   { id: 'filesystem', label: 'Filesystem', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem', '.'], hint: 'Read and write files under the given folders' },
   { id: 'playwright', label: 'Playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'], hint: 'Drive a browser' },
   { id: 'fetch', label: 'Fetch', command: 'uvx', args: ['mcp-server-fetch'], hint: 'Fetch web pages as markdown' },
   { id: 'git', label: 'Git', command: 'uvx', args: ['mcp-server-git'], hint: 'Inspect git repositories' },
+  // Roblox's built-in Studio MCP server (create.roblox.com/docs/studio/mcp); Studio must be installed and running
+  {
+    id: 'roblox-studio',
+    label: 'Roblox Studio',
+    ...(IS_WIN ? { command: 'cmd.exe', args: ['/c', '%LOCALAPPDATA%\\Roblox\\mcp.bat'] } : { command: '/Applications/RobloxStudio.app/Contents/MacOS/StudioMCP', args: [] }),
+    hint: 'Build and test in Roblox Studio (keep Studio open)',
+  },
+  // the official Hex-Rays server (github.com/HexRaysSA/ida-mcp); the first uvx run downloads it
+  {
+    id: 'ida',
+    label: 'IDA Pro',
+    command: 'uvx',
+    args: ['ida-nexus', 'mcp', '--agent=odex'],
+    hint: 'Reverse engineering with IDA Pro 9.4+ (needs uv; install the ida-mcp plugin to use databases open in IDA)',
+    startupSecs: 120,
+  },
 ]
 
 // ------------------------------------------------------------------ editor
@@ -211,6 +229,7 @@ function McpServerEditor(props: { name: string | null; initial: McpServerToml; e
     setType('stdio')
     setCommand(t.command)
     setArgs(t.args)
+    if (t.startupSecs) setStartup(String(t.startupSecs))
     if (!name.trim()) setName(t.id)
   }
 

@@ -166,6 +166,39 @@ test('MCP: HTTP form validation, a failing server shows its error and can be rem
   await expect(page.getByTestId('mcp-server-fixture')).toBeVisible()
 })
 
+test('MCP: Roblox Studio and IDA Pro templates fill in the server form', async () => {
+  const { page } = L
+  await openPanel(page, 'MCP servers')
+  await page.getByRole('button', { name: 'Add server' }).click()
+  const dlg = page.getByRole('dialog', { name: 'Add MCP server' })
+  const args = () => dlg.getByRole('group', { name: 'Argument' }).locator('input').evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value))
+  const name = dlg.getByLabel('Name', { exact: true })
+
+  await dlg.getByRole('button', { name: 'Roblox Studio' }).click()
+  await expect(name).toHaveValue('roblox-studio')
+  if (process.platform === 'win32') {
+    await expect(dlg.getByLabel('Command to launch')).toHaveValue('cmd.exe')
+    expect(await args()).toEqual(['/c', '%LOCALAPPDATA%\\Roblox\\mcp.bat'])
+  } else {
+    await expect(dlg.getByLabel('Command to launch')).toHaveValue('/Applications/RobloxStudio.app/Contents/MacOS/StudioMCP')
+    expect(await args()).toEqual([])
+  }
+
+  // a template only names an unnamed server
+  await name.fill('')
+  await dlg.getByRole('button', { name: 'IDA Pro' }).click()
+  await expect(name).toHaveValue('ida')
+  await expect(dlg.getByLabel('Command to launch')).toHaveValue('uvx')
+  expect(await args()).toEqual(['ida-nexus', 'mcp', '--agent=odex'])
+  // the first uvx run downloads the server, so the template allows a slow start
+  await dlg.locator('summary', { hasText: 'Advanced' }).click()
+  await expect(dlg.getByLabel('Startup timeout (seconds)')).toHaveValue('120')
+
+  // nothing is saved (or launched) until the user saves
+  await dlg.getByRole('button', { name: 'Cancel' }).click()
+  expect(fs.readFileSync(path.join(L.home, 'config.toml'), 'utf8')).not.toMatch(/mcp_servers\.(ida|roblox-studio)/)
+})
+
 test('Skills: create, validate, edit and disable a skill', async () => {
   const { page } = L
   await openPanel(page, 'Skills')
