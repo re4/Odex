@@ -1329,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "odex-app-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1346,7 +1346,7 @@ dependencies = [
 
 [[package]]
 name = "odex-apply-patch"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pretty_assertions",
  "serde",
@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "odex-automations"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "croner",
@@ -1369,7 +1369,7 @@ dependencies = [
 
 [[package]]
 name = "odex-browser-bridge"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1389,7 +1389,7 @@ dependencies = [
 
 [[package]]
 name = "odex-comfyui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "odex-mock-vllm",
@@ -1404,7 +1404,7 @@ dependencies = [
 
 [[package]]
 name = "odex-computer-use"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "image",
@@ -1416,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "odex-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "odex-context"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1453,7 +1453,7 @@ dependencies = [
 
 [[package]]
 name = "odex-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1500,7 +1500,7 @@ dependencies = [
 
 [[package]]
 name = "odex-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1518,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "odex-exec"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1533,7 +1533,7 @@ dependencies = [
 
 [[package]]
 name = "odex-execpolicy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pretty_assertions",
  "regex",
@@ -1544,7 +1544,7 @@ dependencies = [
 
 [[package]]
 name = "odex-file-search"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "encoding_rs",
  "globset",
@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "odex-git"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "chrono",
@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "odex-hooks"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hex",
  "odex-protocol",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "odex-llm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1616,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "odex-mcp-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1641,7 +1641,7 @@ dependencies = [
 
 [[package]]
 name = "odex-memories"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hex",
  "odex-protocol",
@@ -1656,7 +1656,7 @@ dependencies = [
 
 [[package]]
 name = "odex-mock-vllm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1675,7 +1675,7 @@ dependencies = [
 
 [[package]]
 name = "odex-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1684,7 +1684,7 @@ dependencies = [
 
 [[package]]
 name = "odex-sandbox"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "encoding_rs",
  "libc",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "odex-tools"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

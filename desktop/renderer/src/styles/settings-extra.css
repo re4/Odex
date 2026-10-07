@@ -516,3 +516,18 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---------- updates (About) */
+.update-progress {
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 3px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.update-progress > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--transition);
+}

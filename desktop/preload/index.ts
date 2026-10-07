@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent, webUtils } from 'electron'
+import type { UpdateState } from '@shared/desktop'
 
 type Listener<T> = (payload: T) => void
 
@@ -125,6 +126,16 @@ const api = {
     killSwitch: (on?: boolean) => ipcRenderer.invoke('app:killSwitch', on),
     killSwitchState: () => ipcRenderer.invoke('app:killSwitchState') as Promise<boolean>,
     theme: () => ipcRenderer.invoke('app:theme') as Promise<'dark' | 'light'>,
+  },
+  /** App updates from the GitHub releases page (main/updater.ts). */
+  updates: {
+    state: () => ipcRenderer.invoke('update:state') as Promise<UpdateState>,
+    /** Check now; resolves once the check is done (a download may continue in the background). */
+    check: () => ipcRenderer.invoke('update:check') as Promise<UpdateState>,
+    download: () => ipcRenderer.invoke('update:download') as Promise<void>,
+    /** Quit, install the downloaded update and relaunch. */
+    install: () => ipcRenderer.invoke('update:install') as Promise<void>,
+    onState: (cb: Listener<UpdateState>) => on('odex:update-state', cb),
   },
   platform: process.platform,
 }

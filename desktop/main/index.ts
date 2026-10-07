@@ -11,6 +11,7 @@ import * as terminals from './terminals'
 import { openInEditor } from './editor'
 import { createWindow, mainWindow, openQuickChat, setQuitting, showMain, updateTitleBars } from './windows'
 import { handlePreviewProtocol, registerPreviewIpc, registerPreviewScheme } from './preview'
+import { checkForUpdates, downloadUpdate, initUpdater, installUpdate, onUpdateState, updateState } from './updater'
 
 const engine = new EngineHost()
 let tray: Tray | null = null
@@ -79,6 +80,7 @@ function updateTray(): void {
   const running = all.filter((t) => t.status === 'running' || t.status === 'compacting' || t.status === 'reconnecting').length
   const waiting = all.filter((t) => t.status === 'waitingApproval').length
   const usageLabel = usageToday == null ? null : `${formatTokenCount(usageToday)} tokens today`
+  const update = updateState()
   const tooltip = `Odex — ${running} running${waiting ? `, ${waiting} need approval` : ''}${usageLabel ? ` · ${usageLabel}` : ''}`
   tray.setToolTip(tooltip)
   // read by the e2e tests (app.evaluate)
@@ -94,6 +96,7 @@ function updateTray(): void {
     { type: 'separator' },
     { label: killSwitch ? 'Release kill switch' : 'Kill switch (stop computer & browser use)', click: () => void toggleKillSwitch() },
     { type: 'separator' },
+    ...(update.status === 'downloaded' ? [{ label: `Restart to update to ${update.version}`, click: () => installUpdate() }] : []),
     { label: 'Quit Odex', click: () => quit() },
   ])
   tray.setContextMenu(menu)
@@ -370,6 +373,11 @@ function registerIpc(): void {
   ipcMain.handle('app:quit', () => quit())
   ipcMain.handle('app:killSwitch', (_e, on?: boolean) => toggleKillSwitch(on))
   ipcMain.handle('app:theme', () => (nativeTheme.shouldUseDarkColors ? 'dark' : 'light'))
+
+  ipcMain.handle('update:state', () => updateState())
+  ipcMain.handle('update:check', () => checkForUpdates())
+  ipcMain.handle('update:download', () => downloadUpdate())
+  ipcMain.handle('update:install', () => installUpdate())
 }
 
 function registerShortcuts(): void {
@@ -416,6 +424,15 @@ app.whenReady().then(async () => {
     updateTray()
   })
   void engine.start()
+  initUpdater((u) => {
+    if (!anyFocused()) notify('Update ready', `Odex ${u.version} has been downloaded. Open Odex to restart and install it.`)
+  })
+  // the tray offers "Restart to update" once an update is downloaded
+  let updateStatus = updateState().status
+  onUpdateState((u) => {
+    if (u.status !== updateStatus) updateTray()
+    updateStatus = u.status
+  })
   createWindow()
   try {
     const img = nativeImage.createFromPath(resourcePath(process.platform === 'darwin' ? 'tray-16.png' : 'icon-32.png'))

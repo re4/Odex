@@ -74,7 +74,9 @@ export interface Launched {
 }
 
 /** Launch the built app with an isolated ~/.odex and profile. */
-export async function launch(opts: { mockUrl?: string; onboarded?: boolean; theme?: 'light' | 'dark'; git?: boolean } = {}): Promise<Launched> {
+export async function launch(
+  opts: { mockUrl?: string; onboarded?: boolean; theme?: 'light' | 'dark'; git?: boolean; settings?: Record<string, unknown>; env?: Record<string, string> } = {},
+): Promise<Launched> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'odex-e2e-'))
   const home = path.join(root, 'home')
   const project = path.join(root, 'project')
@@ -112,7 +114,7 @@ export async function launch(opts: { mockUrl?: string; onboarded?: boolean; them
   }
   fs.writeFileSync(
     path.join(home, 'desktop.json'),
-    JSON.stringify({ onboarded: opts.onboarded ?? true, theme: opts.theme ?? 'light', notifyTurnComplete: 'never', notifyApprovals: false, keepAwake: false, keepRunningInTray: false, reducedMotion: 'on' }),
+    JSON.stringify({ onboarded: opts.onboarded ?? true, theme: opts.theme ?? 'light', notifyTurnComplete: 'never', notifyApprovals: false, keepAwake: false, keepRunningInTray: false, reducedMotion: 'on', ...opts.settings }),
   )
   const app = await electron.launch({
     args: [path.join(desktopDir, process.env.ODEX_OUT || 'out', 'main', 'index.js')],
@@ -123,6 +125,7 @@ export async function launch(opts: { mockUrl?: string; onboarded?: boolean; them
       ODEX_ENGINE_PATH: process.env.ODEX_ENGINE_BIN || binary('odex-engine'),
       ODEX_E2E: '1',
       ODEX_LOG: 'warn',
+      ...opts.env,
     } as Record<string, string>,
   })
   const page = await app.firstWindow()

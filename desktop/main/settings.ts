@@ -37,6 +37,7 @@ export const defaults: DesktopSettings = {
   quickChatOnTop: false,
   openDevServerUrls: true,
   projectEditors: {},
+  autoUpdate: true,
 }
 
 let cache: DesktopSettings | null = null

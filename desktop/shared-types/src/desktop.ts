@@ -38,4 +38,23 @@ export interface DesktopSettings {
   openDevServerUrls: boolean
   /** Per-project editor command overriding `editor`, keyed by project id. */
   projectEditors: Record<string, string>
+  /** Check GitHub releases for new versions in the background and download them (installing always asks). */
+  autoUpdate: boolean
+}
+
+/** App updates (main/updater.ts), pushed to the renderer on `odex:update-state`. */
+export interface UpdateState {
+  status: 'unsupported' | 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+  currentVersion: string
+  /** Why this build can't update itself (status 'unsupported'). */
+  reason?: string
+  /** Newest released version (when newer than the running one). */
+  version?: string
+  releaseDate?: string
+  /** Release page for `version`, or the releases list. */
+  releaseUrl: string
+  progress?: { percent: number; transferred: number; total: number; bytesPerSecond: number }
+  error?: string
+  /** When the last check finished (ms since epoch). */
+  checkedAt?: number
 }

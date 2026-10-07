@@ -18,6 +18,7 @@ import type {
   HookInfo,
   DiffStats,
   DesktopSettings,
+  UpdateState,
 } from '@shared/index'
 import { call, toast } from '@/lib/rpc'
 
@@ -107,6 +108,8 @@ interface AppState {
   automationUnread: number
   computerUseActive: { active: boolean; threadId?: string | null; app?: string | null; takeover: boolean }
   killSwitch: boolean
+  /** App updates (Settings → About, the update prompt). */
+  update: UpdateState | null
   ui: UiState
   /** File the files panel should open next (set before the panel mounts). */
   fileToOpen: { path: string; line?: number; at: number } | null
@@ -254,6 +257,7 @@ export const useApp = create<AppState>((set, get) => ({
   automationUnread: 0,
   computerUseActive: { active: false, takeover: false },
   killSwitch: false,
+  update: null,
   ui: loadUi(),
   fileToOpen: null,
   history: [],
