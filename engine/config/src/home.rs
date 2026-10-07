@@ -78,6 +78,10 @@ impl OdexHome {
     pub fn memories_dir(&self) -> PathBuf {
         self.root.join("memories")
     }
+    /// Default home of ComfyUI workflow files.
+    pub fn comfyui_dir(&self) -> PathBuf {
+        self.root.join("comfyui")
+    }
     pub fn logs_dir(&self) -> PathBuf {
         self.root.join("logs")
     }

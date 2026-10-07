@@ -20,6 +20,7 @@ odex-git.workspace = true
 odex-mcp-client.workspace = true
 odex-computer-use.workspace = true
 odex-browser-bridge.workspace = true
+odex-comfyui.workspace = true
 odex-automations.workspace = true
 odex-memories.workspace = true
 anyhow.workspace = true

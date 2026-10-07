@@ -304,6 +304,15 @@ pub struct PlanDecisionParams {
 pub struct ModelListResponse {
     pub models: Vec<ModelInfo>,
     pub roles: BTreeMap<String, String>,
+    /// Discovered models the user removed (`hidden_models`), restorable.
+    pub hidden: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRemoveParams {
+    /// Model key from `model/list`.
+    pub key: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
@@ -375,6 +384,35 @@ pub struct PresetInfo {
 #[serde(rename_all = "camelCase")]
 pub struct PresetListResponse {
     pub presets: Vec<PresetInfo>,
+}
+
+// ------------------------------------------------------------------- comfyui
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComfyWorkflowInfo {
+    /// File name without `.json`; what `comfyui.image_workflow` names.
+    pub name: String,
+    pub path: String,
+    /// `{{...}}` placeholders the workflow takes, e.g. `prompt`, `seed`.
+    pub placeholders: Vec<String>,
+    pub nodes: u32,
+    /// Why the file can't be used (not JSON, a UI-format export, ...).
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComfyStatusResponse {
+    pub url: Option<String>,
+    /// The server answered `/system_stats`.
+    pub reachable: bool,
+    pub version: Option<String>,
+    pub error: Option<String>,
+    pub workflows_dir: String,
+    pub workflows: Vec<ComfyWorkflowInfo>,
+    pub image_workflow: Option<String>,
+    pub model3d_workflow: Option<String>,
 }
 
 // -------------------------------------------------------------------- config

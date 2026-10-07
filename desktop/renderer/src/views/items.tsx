@@ -601,8 +601,8 @@ export const ItemView = memo(function ItemView({ item, turn, threadId }: { item:
     case 'imageView':
       return (
         <div className="item">
-          <div className="tool-line">
-            <FileText size={13} /> Viewed image {item.path}
+          <div className="tool-line" title={item.prompt || undefined}>
+            <FileText size={13} /> {item.prompt != null ? 'Generated image' : 'Viewed image'} {item.path}
           </div>
           <ImageFromPath path={item.path} cwd={cwd} />
         </div>

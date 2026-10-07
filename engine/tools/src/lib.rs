@@ -72,6 +72,14 @@ pub fn args_summary(tool: &str, args: &Value) -> String {
             clip(&files.join(", "), 160)
         }
         "spawn_agent" => clip(&s("task"), 100),
+        "generate_image" | "generate_3d" => {
+            let p = s("prompt");
+            if p.is_empty() {
+                s("image")
+            } else {
+                clip(&p, 100)
+            }
+        }
         "write_stdin" => format!("{} {}", s("session_id"), clip(&s("chars"), 60)),
         _ => clip(&args.to_string(), 160),
     }

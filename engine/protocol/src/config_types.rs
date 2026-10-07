@@ -56,6 +56,9 @@ pub struct ConfigToml {
     pub model_providers: BTreeMap<String, ModelProviderToml>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, ModelToml>,
+    /// Discovered models left out of the model list, as `<provider>:<model id>`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden_models: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<ContextToml>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,6 +73,9 @@ pub struct ConfigToml {
     pub computer_use: Option<ComputerUseToml>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browser: Option<BrowserToml>,
+    /// `[comfyui]`: image and 3D generation through a ComfyUI server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comfyui: Option<ComfyUiToml>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memories: Option<MemoriesToml>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -403,6 +409,29 @@ pub struct BrowserToml {
     /// CDP websocket/HTTP endpoint used by headless `exec` (e.g. http://127.0.0.1:9222).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cdp_url: Option<String>,
+}
+
+/// `[comfyui]`: the ComfyUI server and workflows behind `generate_image` and
+/// `generate_3d`. Workflows are API-format exports with `{{prompt}}`-style
+/// placeholders, kept in `workflows_dir`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default)]
+pub struct ComfyUiToml {
+    /// Server URL, e.g. `http://127.0.0.1:8188`. Generation is off when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Workflow (file name without `.json`) used by `generate_image`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_workflow: Option<String>,
+    /// Workflow used by `generate_3d`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model3d_workflow: Option<String>,
+    /// Folder of workflow files; default `~/.odex/comfyui`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflows_dir: Option<String>,
+    /// Longest wait for one generation, in seconds (default 900).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]

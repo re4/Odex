@@ -25,6 +25,9 @@ struct Args {
     delay_ms: u64,
     #[arg(long)]
     api_key: Option<String>,
+    /// Also serve a mock ComfyUI on this port (0 = any free port).
+    #[arg(long)]
+    comfy_port: Option<u16>,
 }
 
 #[tokio::main]
@@ -45,6 +48,14 @@ async fn main() -> anyhow::Result<()> {
         server.set_policy(move |r| policy.reply(r));
     }
     println!("odex-mock-vllm listening on {}", server.url);
+    let _comfy = match a.comfy_port {
+        Some(port) => {
+            let c = odex_mock_vllm::comfy::MockComfy::start_on(&format!("{}:{port}", a.host)).await;
+            println!("mock comfyui listening on {}", c.url);
+            Some(c)
+        }
+        None => None,
+    };
     tokio::signal::ctrl_c().await?;
     Ok(())
 }

@@ -34,7 +34,7 @@ export interface SettingsPanelDef {
 export const SETTINGS_PANELS: SettingsPanelDef[] = [
   { id: 'general', label: 'General', group: 'App', component: GeneralSettings, keywords: 'theme font density enter notifications tray terminal editor' },
   { id: 'shortcuts', label: 'Keyboard shortcuts', group: 'App', component: ShortcutsSettings, keywords: 'keys bindings hotkeys' },
-  { id: 'models', label: 'Models & Endpoints', group: 'Agent', component: ModelsSettings, keywords: 'vllm provider doctor roles presets api key' },
+  { id: 'models', label: 'Models & Endpoints', group: 'Agent', component: ModelsSettings, keywords: 'vllm provider doctor roles presets api key remove hide comfyui image 3d generation workflow' },
   { id: 'personalization', label: 'Personalization', group: 'Agent', component: PersonalizationSettings, keywords: 'custom instructions agents.md' },
   { id: 'permissions', label: 'Permissions & sandbox', group: 'Agent', component: PermissionsSettings, keywords: 'approvals sandbox network rules execpolicy auto review' },
   { id: 'context', label: 'Context', group: 'Agent', component: ContextSettings, keywords: 'compaction prune budget tokens' },

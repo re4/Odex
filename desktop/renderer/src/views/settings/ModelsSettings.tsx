@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, CircleAlert, CircleMinus, Copy, Plus, RefreshCw, Stethoscope, Trash2, TriangleAlert } from 'lucide-react'
-import type { CheckStatus, DoctorReport, ModelRole, PresetInfo, ProviderInfo } from '@shared/index'
+import { CheckCircle2, CircleAlert, CircleMinus, Copy, FolderOpen, Plus, RefreshCw, RotateCcw, Stethoscope, Trash2, TriangleAlert, Upload } from 'lucide-react'
+import type { CheckStatus, ComfyStatusResponse, DoctorReport, ModelInfo, ModelRole, PresetInfo, ProviderInfo } from '@shared/index'
 import { useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import * as A from '@/lib/actions'
@@ -13,6 +13,116 @@ const ROLES: Array<{ role: ModelRole; label: string; hint: string }> = [
   { role: 'vision', label: 'Vision', hint: 'Screenshots and images when the main model has no vision' },
   { role: 'utility', label: 'Utility', hint: 'Titles, commit messages, follow-up suggestions' },
 ]
+
+/** Generation roles: a ComfyUI workflow each, not a chat model. */
+const GENERATION: Array<{ key: 'image_workflow' | 'model3d_workflow'; field: 'imageWorkflow' | 'model3dWorkflow'; label: string; hint: string }> = [
+  { key: 'image_workflow', field: 'imageWorkflow', label: 'Image generation', hint: 'ComfyUI workflow for the generate_image tool' },
+  { key: 'model3d_workflow', field: 'model3dWorkflow', label: '3D generation', hint: 'ComfyUI workflow for the generate_3d tool' },
+]
+
+function ComfySection({ status, onChange }: { status: ComfyStatusResponse | null; onChange: (s: ComfyStatusResponse) => void }) {
+  const [url, setUrl] = useState(status?.url ?? '')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => setUrl(status?.url ?? ''), [status?.url])
+  const dirty = url.trim().replace(/\/+$/, '') !== (status?.url ?? '')
+
+  const save = async () => {
+    setBusy(true)
+    try {
+      if (dirty) await call('config/write', { edits: [{ keyPath: 'comfyui.url', value: url.trim() || null }] })
+      onChange(await call('comfyui/status', {}))
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const importWorkflows = async () => {
+    const paths = await window.odex.dialog.openFiles()
+    let next: ComfyStatusResponse | null = null
+    for (const path of paths) {
+      try {
+        next = await call('comfyui/import', { path })
+      } catch (e) {
+        toast(`${path.split(/[\\/]/).pop()}: ${(e as Error).message}`, 'error')
+      }
+    }
+    if (next) onChange(next)
+  }
+
+  const usedFor = (name: string) =>
+    GENERATION.filter((g) => status?.[g.field] === name)
+      .map((g) => g.label)
+      .join(', ')
+
+  return (
+    <section>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <h3 className="grow" style={{ margin: 0 }}>
+          ComfyUI
+        </h3>
+        <button className="btn btn-sm" onClick={() => void importWorkflows()}>
+          <Upload size={13} /> Import workflow
+        </button>
+        <button className="btn btn-sm" disabled={!status} onClick={() => status && void window.odex.shell.openPath(status.workflowsDir)}>
+          <FolderOpen size={13} /> Open folder
+        </button>
+      </div>
+      <div className="xs muted" style={{ marginBottom: 8 }}>
+        Image and 3D generation run your ComfyUI workflows. In ComfyUI, type <code>{'{{prompt}}'}</code> into the prompt box (optionally <code>{'{{negative_prompt}}'}</code>, <code>{'{{width}}'}</code>,{' '}
+        <code>{'{{height}}'}</code>, <code>{'{{seed}}'}</code>, or <code>{'{{image}}'}</code> in a Load Image node for image-to-3D), export it with Workflow → Export (API), then import the file here.
+      </div>
+      <div className="row">
+        <label htmlFor="comfy-url" style={{ width: 200, flex: 'none' }}>
+          Server URL
+        </label>
+        <input
+          id="comfy-url"
+          className="input mono"
+          style={{ maxWidth: 380 }}
+          value={url}
+          placeholder="http://127.0.0.1:8188"
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && void save()}
+        />
+        <button className="btn btn-sm" disabled={busy || (!dirty && !status?.url)} onClick={() => void save()}>
+          {busy ? 'Checking…' : dirty ? 'Save' : 'Test'}
+        </button>
+      </div>
+      {status?.url && !dirty && (
+        <div className="row xs" style={{ marginTop: 4, paddingLeft: 208 }}>
+          <span className={`dot ${status.reachable ? 'success' : 'danger'}`} aria-hidden />
+          <span className={`selectable ${status.reachable ? 'subtle' : ''}`} style={status.reachable ? undefined : { color: 'var(--danger)' }}>
+            {status.reachable ? `Connected · ComfyUI ${status.version ?? ''}` : status.error}
+          </span>
+        </div>
+      )}
+      {status && status.workflows.length === 0 && <div className="muted small" style={{ marginTop: 8 }}>No workflows yet.</div>}
+      {status && status.workflows.length > 0 && (
+        <div className="col" style={{ gap: 4, marginTop: 8 }}>
+          {status.workflows.map((w) => (
+            <div key={w.path} className="row small" style={{ padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
+              <b className="ellipsis" style={{ width: 200, flex: 'none' }} title={w.path}>
+                {w.name}
+              </b>
+              {w.error ? (
+                <span className="xs grow" style={{ color: 'var(--danger)' }}>
+                  {w.error}
+                </span>
+              ) : (
+                <span className="xs subtle grow">
+                  {w.nodes} nodes · {w.placeholders.length ? w.placeholders.map((p) => `{{${p}}}`).join(' ') : 'no placeholders'}
+                </span>
+              )}
+              {usedFor(w.name) && <span className="badge">{usedFor(w.name)}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
 
 function StatusIcon({ s }: { s: CheckStatus }) {
   if (s === 'pass') return <CheckCircle2 size={14} color="var(--success)" aria-label="pass" />
@@ -144,15 +254,20 @@ export function ModelsSettings() {
   const providers = useApp((s) => s.providers)
   const models = useApp((s) => s.models)
   const roles = useApp((s) => s.roles)
+  const hiddenModels = useApp((s) => s.hiddenModels)
   const [editing, setEditing] = useState<ProviderInfo | 'new' | null>(null)
   const [reports, setReports] = useState<DoctorReport[]>([])
   const [doctorBusy, setDoctorBusy] = useState<string | null>(null)
   const [presets, setPresets] = useState<PresetInfo[]>([])
   const [refreshing, setRefreshing] = useState(false)
+  const [comfy, setComfy] = useState<ComfyStatusResponse | null>(null)
 
   useEffect(() => {
     void call('preset/list', {})
       .then((r) => setPresets(r.presets))
+      .catch(() => {})
+    void call('comfyui/status', {})
+      .then(setComfy)
       .catch(() => {})
   }, [])
 
@@ -171,6 +286,34 @@ export function ModelsSettings() {
 
   const setRole = async (role: ModelRole, key: string) => {
     await call('config/write', { edits: [{ keyPath: `roles.${role}`, value: key || null }] })
+    await useApp.getState().refreshModels()
+  }
+
+  const setWorkflow = async (key: (typeof GENERATION)[number]['key'], name: string) => {
+    await call('config/write', { edits: [{ keyPath: `comfyui.${key}`, value: name || null }] })
+    setComfy(await call('comfyui/status', {}))
+  }
+
+  const removeModel = async (m: ModelInfo) => {
+    const configured = m.key !== `${m.providerId}:${m.modelId}`
+    const what = [
+      configured ? 'Its [models] entry is deleted from config.toml.' : '',
+      m.available ? `${m.providerId} still serves it; you can restore it under Removed models.` : '',
+      m.roles.length ? `Roles using it (${m.roles.join(', ')}) go back to their default.` : '',
+    ]
+      .filter(Boolean)
+      .join(' ')
+    if (!(await A.confirmDialog('Remove model', `Remove ${m.displayName} (${m.key}) from the model list? ${what}`, 'Remove', true))) return
+    try {
+      await call('model/remove', { key: m.key })
+      await useApp.getState().refreshModels()
+    } catch (e) {
+      toast(`Could not remove ${m.displayName}: ${(e as Error).message}`, 'error')
+    }
+  }
+
+  const restoreModel = async (key: string) => {
+    await call('config/write', { edits: [{ keyPath: 'hidden_models', value: hiddenModels.filter((k) => k !== key) }] })
     await useApp.getState().refreshModels()
   }
 
@@ -261,8 +404,38 @@ export function ModelsSettings() {
               </select>
             </div>
           ))}
+          {GENERATION.map((g) => {
+            const current = comfy?.[g.field] ?? ''
+            const usable = comfy?.workflows.filter((w) => !w.error) ?? []
+            return (
+              <div key={g.key} className="row">
+                <div style={{ width: 200 }}>
+                  <div>{g.label}</div>
+                  <div className="xs subtle">{g.hint}</div>
+                </div>
+                <select
+                  className="select"
+                  style={{ maxWidth: 380 }}
+                  value={current}
+                  disabled={!comfy?.url}
+                  onChange={(e) => void setWorkflow(g.key, e.target.value)}
+                  aria-label={`${g.label} workflow`}
+                >
+                  <option value="">{comfy?.url ? 'Off' : 'Set a ComfyUI server below'}</option>
+                  {current && !usable.some((w) => w.name === current) && <option value={current}>{current} (missing)</option>}
+                  {usable.map((w) => (
+                    <option key={w.name} value={w.name}>
+                      {w.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )
+          })}
         </div>
       </section>
+
+      <ComfySection status={comfy} onChange={setComfy} />
 
       <section>
         <h3 style={{ margin: '0 0 8px' }}>Models</h3>
@@ -287,10 +460,28 @@ export function ModelsSettings() {
                     {doctorBusy === m.modelId ? 'Running…' : 'Doctor'}
                   </button>
                 </td>
+                <td>
+                  <button className="icon-btn sm" title="Remove from the list" aria-label={`Remove ${m.key}`} onClick={() => void removeModel(m)}>
+                    <Trash2 size={13} />
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+        {hiddenModels.length > 0 && (
+          <details style={{ marginTop: 8 }}>
+            <summary className="small">Removed models ({hiddenModels.length})</summary>
+            {hiddenModels.map((k) => (
+              <div key={k} className="row small" style={{ padding: '4px 0' }}>
+                <span className="mono xs ellipsis grow">{k}</span>
+                <button className="btn btn-sm btn-ghost" aria-label={`Restore ${k}`} onClick={() => void restoreModel(k)}>
+                  <RotateCcw size={12} /> Restore
+                </button>
+              </div>
+            ))}
+          </details>
+        )}
       </section>
 
       {reports.length > 0 && (

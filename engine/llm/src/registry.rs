@@ -303,7 +303,12 @@ impl ModelRegistry {
             m.clone()
         } else {
             let st = self.state.read().unwrap();
-            let prov = st.iter().find(|(_, s)| s.models.iter().any(|d| d.id == key)).map(|(p, _)| p.clone())?;
+            let prov = st
+                .iter()
+                .find(|(p, s)| {
+                    s.models.iter().any(|d| d.id == key) && !settings.hidden_models.contains(&format!("{p}:{key}"))
+                })
+                .map(|(p, _)| p.clone())?;
             ResolvedModel::discovered(&prov, key, &self.presets)
         };
         let m = self.with_cache(m);
@@ -349,10 +354,15 @@ impl ModelRegistry {
         if let Some((k, _)) = settings.models.iter().next() {
             return Some(k.clone());
         }
+        let hidden = settings.hidden_models.clone();
         drop(settings);
         let st = self.state.read().unwrap();
         for (p, s) in st.iter() {
-            if let Some(m) = s.models.iter().find(|m| !m.id.to_lowercase().contains("embed")) {
+            if let Some(m) = s
+                .models
+                .iter()
+                .find(|m| !m.id.to_lowercase().contains("embed") && !hidden.contains(&format!("{p}:{}", m.id)))
+            {
                 return Some(format!("{p}:{}", m.id));
             }
         }
@@ -403,6 +413,9 @@ impl ModelRegistry {
         let st = self.state.read().unwrap().clone();
         for (p, s) in st.iter() {
             for d in &s.models {
+                if settings.hidden_models.contains(&format!("{p}:{}", d.id)) {
+                    continue;
+                }
                 if seen.insert((p.clone(), d.id.clone())) {
                     out.push(mk(ResolvedModel::discovered(p, &d.id, &self.presets), true, self));
                 }

@@ -397,7 +397,12 @@ pub enum ThreadItem {
         image: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
-    ImageView { id: String, path: String },
+    ImageView {
+        id: String,
+        path: String,
+        /// Set when `generate_image` created the file.
+        prompt: Option<String>,
+    },
     #[serde(rename_all = "camelCase")]
     Review { id: String, summary: String, findings: Vec<ReviewFinding>, overall_correctness: Option<String> },
     #[serde(rename_all = "camelCase")]

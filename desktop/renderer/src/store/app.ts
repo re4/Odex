@@ -96,6 +96,8 @@ interface AppState {
   projects: Project[]
   models: ModelInfo[]
   roles: Record<string, string | undefined>
+  /** Discovered models removed from the list (`hidden_models`). */
+  hiddenModels: string[]
   providers: ProviderInfo[]
   mcp: McpServerStatus[]
   serverRequests: ServerRequest[]
@@ -242,6 +244,7 @@ export const useApp = create<AppState>((set, get) => ({
   projects: [],
   models: [],
   roles: {},
+  hiddenModels: [],
   providers: [],
   mcp: [],
   serverRequests: [],
@@ -293,7 +296,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   refreshModels: async (refresh = false) => {
     const [m, p] = await Promise.all([call('model/list', {}), call('provider/list', { refresh })])
-    set({ models: m.models, roles: m.roles, providers: p.providers })
+    set({ models: m.models, roles: m.roles, hiddenModels: m.hidden, providers: p.providers })
   },
 
   selectThread: async (id) => {
@@ -451,7 +454,7 @@ export const useApp = create<AppState>((set, get) => ({
         break
       case 'providers/updated':
         set({ providers: p.providers })
-        void call('model/list', {}).then((m) => set({ models: m.models, roles: m.roles })).catch(() => {})
+        void call('model/list', {}).then((m) => set({ models: m.models, roles: m.roles, hiddenModels: m.hidden })).catch(() => {})
         break
       case 'projects/changed':
         set({ projects: p.projects })

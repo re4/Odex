@@ -6,9 +6,12 @@
 //! enforces `max_model_len` with vLLM's real error text, can inject faults
 //! (429/503, disconnects, stalls) and records every request.
 //!
+//! [`comfy::MockComfy`] mocks a ComfyUI server for the generation tools.
+//!
 //! Control endpoints for out-of-process tests (Playwright): `POST /__mock/push`,
 //! `POST /__mock/rules`, `GET /__mock/requests`, `POST /__mock/reset`.
 
+pub mod comfy;
 pub mod rules;
 
 use std::collections::VecDeque;

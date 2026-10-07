@@ -84,12 +84,15 @@ requests!(CLIENT_REQUESTS, method {
     REVIEW_START = "review/start": ReviewStartParams => TurnStartResponse,
 
     MODEL_LIST = "model/list": EmptyParams => ModelListResponse,
+    MODEL_REMOVE = "model/remove": ModelRemoveParams => ModelListResponse,
     PROVIDER_LIST = "provider/list": ProviderListParams => ProviderListResponse,
     PROVIDER_UPSERT = "provider/upsert": ProviderUpsertParams => ProviderListResponse,
     PROVIDER_REMOVE = "provider/remove": ProviderIdParams => ProviderListResponse,
     PROVIDER_TEST = "provider/test": ProviderTestParams => ProviderTestResult,
     DOCTOR_RUN = "doctor/run": DoctorRunParams => DoctorRunResponse,
     PRESET_LIST = "preset/list": EmptyParams => PresetListResponse,
+    COMFYUI_STATUS = "comfyui/status": EmptyParams => ComfyStatusResponse,
+    COMFYUI_IMPORT = "comfyui/import": PathParams => ComfyStatusResponse,
 
     CONFIG_READ = "config/read": EmptyParams => ConfigReadResponse,
     CONFIG_WRITE = "config/write": ConfigWriteParams => ConfigReadResponse,

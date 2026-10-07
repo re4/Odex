@@ -21,7 +21,8 @@ Odex has two parts. A headless Rust engine (`odex-engine`) runs the agent: threa
 
 **Built for self-hosted models**
 - Several endpoints at once. Model discovery through `/v1/models`, with the context window read from `max_model_len`.
-- Model roles: `main`, `compactor`, `reviewer`, `vision`, `utility`, each falling back to `main`.
+- Model roles: `main`, `compactor`, `reviewer`, `vision`, `utility`, each falling back to `main`. Discovered models you don't want can be removed from the list (and restored).
+- Image and 3D generation through ComfyUI: pick API-format workflows for the Image generation and 3D generation roles, and the agent gets `generate_image` / `generate_3d`, saving results into the workspace. See [`[comfyui]`](docs/config.md#comfyui).
 - [Presets](presets/models.toml) for popular coding models, each with the exact `vllm serve` flags it needs.
 - **Doctor:** checks an endpoint for streaming, native and parallel tool calls, reasoning parsing, vision, `/tokenize`, prefix caching and structured output, then suggests the missing server flags.
 - A client-side fallback parser for tool calls that arrive as text (Hermes, Qwen3-Coder XML, GLM, Mistral, DeepSeek, Kimi, Llama JSON, pythonic), JSON argument repair, retries with backoff, and transparent recovery from context-overflow errors.
@@ -178,10 +179,11 @@ engine/                 Rust workspace; builds the odex-engine binary
   mcp-client/           MCP stdio + HTTP client, OAuth, schema sanitizing
   computer-use/         Screenshots, UI Automation, input (Windows first)
   browser-bridge/       Browser use over CDP
+  comfyui/              ComfyUI client for image and 3D generation workflows
   automations/  memories/
   core/                 The engine: threads, turns, approvals, tools, subagents, storage, rollouts
   app-server/  exec/  cli/
-  mock-vllm/            Mock vLLM server for tests (SSE fixtures, faults, max_model_len enforcement)
+  mock-vllm/            Mock vLLM server for tests (SSE fixtures, faults, max_model_len enforcement); also a mock ComfyUI
 desktop/                Electron + React + TypeScript (electron-vite)
   main/  preload/       Main process (engine supervisor, windows, tray, terminals, browser) and bridge
   renderer/             React UI

@@ -743,7 +743,49 @@ pub fn model_list(engine: &Engine) -> ModelListResponse {
     ModelListResponse {
         models: engine.registry.list(),
         roles: s.roles.iter().map(|(k, v)| (k.as_str().to_string(), v.clone())).collect(),
+        hidden: engine.config.read().unwrap().user.hidden_models.clone(),
     }
+}
+
+/// Remove a model from the list: drop its `[models]` entry, hide it if an
+/// endpoint serves it, and unset roles that pointed at it.
+pub fn model_remove(engine: &Engine, p: ModelRemoveParams) -> EResult<ModelListResponse> {
+    let m = engine
+        .registry
+        .list()
+        .into_iter()
+        .find(|m| m.key == p.key)
+        .ok_or_else(|| bad(format!("model {} not found", p.key)))?;
+    let user = engine.config.read().unwrap().user.clone();
+    let served = format!("{}:{}", m.provider_id, m.model_id);
+    let points_here = |v: &str| v == m.key || v == served;
+    let configured = user.models.contains_key(&m.key);
+    let mut edits = Vec::new();
+    if configured {
+        edits.push(ConfigEdit { key_path: format!("models.{}", quote_key(&m.key)), value: Value::Null });
+    }
+    if m.available || !configured {
+        let mut hidden = user.hidden_models.clone();
+        if !hidden.contains(&served) {
+            hidden.push(served.clone());
+        }
+        edits.push(ConfigEdit { key_path: "hidden_models".into(), value: json!(hidden) });
+    }
+    for (role, v) in &user.roles {
+        if points_here(v) {
+            edits.push(ConfigEdit { key_path: format!("roles.{}", quote_key(role)), value: Value::Null });
+        }
+    }
+    if user.model.as_deref().is_some_and(points_here) {
+        edits.push(ConfigEdit { key_path: "model".into(), value: Value::Null });
+    }
+    config_write(engine, ConfigWriteParams { edits, project_path: None })?;
+    Ok(model_list(engine))
+}
+
+/// A config key as one quoted key-path segment.
+fn quote_key(k: &str) -> String {
+    format!("\"{}\"", k.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 pub async fn provider_list(engine: &Engine, p: ProviderListParams) -> ProviderListResponse {
@@ -855,6 +897,37 @@ pub fn preset_list(engine: &Engine) -> PresetListResponse {
     PresetListResponse { presets: engine.registry.presets().all().to_vec() }
 }
 
+// ==================================================================== comfyui
+
+/// The ComfyUI server's health plus the workflows on disk.
+pub async fn comfy_status(engine: &Engine) -> ComfyStatusResponse {
+    let c = engine.user_settings().comfyui;
+    let (reachable, version, error) = match &c.url {
+        Some(url) => match odex_comfyui::ComfyClient::new(url).system_stats().await {
+            Ok(v) => (true, odex_comfyui::ComfyClient::version(&v), None),
+            Err(e) => (false, None, Some(format!("{e:#}"))),
+        },
+        None => (false, None, None),
+    };
+    ComfyStatusResponse {
+        reachable,
+        version,
+        error,
+        workflows_dir: c.workflows_dir.to_string_lossy().to_string(),
+        workflows: odex_comfyui::list_workflows(&c.workflows_dir),
+        url: c.url,
+        image_workflow: c.image_workflow,
+        model3d_workflow: c.model3d_workflow,
+    }
+}
+
+/// Copy an API-format workflow export into the workflows folder.
+pub async fn comfy_import(engine: &Engine, p: PathParams) -> EResult<ComfyStatusResponse> {
+    let dir = engine.user_settings().comfyui.workflows_dir;
+    odex_comfyui::import_workflow(&dir, Path::new(&p.path)).map_err(bad)?;
+    Ok(comfy_status(engine).await)
+}
+
 // ===================================================================== config
 
 pub fn config_read(engine: &Engine) -> ConfigReadResponse {
@@ -883,8 +956,11 @@ pub fn config_write(engine: &Engine, p: ConfigWriteParams) -> EResult<ConfigRead
     odex_config::edit::write_edits(&path, &p.edits).map_err(|e| bad(format!("{e:#}")))?;
     engine.reload_config().map_err(EngineError::from)?;
     let touches_mcp = p.edits.iter().any(|e| e.key_path.starts_with("mcp_servers"));
-    let touches_providers =
-        p.edits.iter().any(|e| e.key_path.starts_with("model_providers") || e.key_path.starts_with("models"));
+    let touches_providers = p.edits.iter().any(|e| {
+        e.key_path.starts_with("model_providers")
+            || e.key_path.starts_with("models")
+            || e.key_path.starts_with("hidden_models")
+    });
     let e2 = engine.clone();
     tokio::spawn(async move {
         if touches_mcp {

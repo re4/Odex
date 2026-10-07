@@ -252,6 +252,66 @@ pub fn spawn_agent() -> ToolSpec {
     )
 }
 
+/// `generate_image`: parameters follow the ComfyUI workflow's placeholders
+/// (`None` when the workflow couldn't be read).
+pub fn generate_image(placeholders: Option<&[String]>) -> ToolSpec {
+    generation(
+        "generate_image",
+        "Generate an image with the user's ComfyUI workflow and save it in the workspace \
+         (default generated/<prompt words>.png). Write a detailed visual prompt: subject, style, composition, lighting.",
+        placeholders,
+        true,
+    )
+}
+
+/// `generate_3d`: like [`generate_image`], for a 3D-model workflow.
+pub fn generate_3d(placeholders: Option<&[String]>) -> ToolSpec {
+    generation(
+        "generate_3d",
+        "Generate a 3D model (usually .glb) with the user's ComfyUI workflow and save it in the workspace \
+         (default generated/<name>.glb). Image-to-3D workflows take `image`, a workspace image path; \
+         you can make one with generate_image first.",
+        placeholders,
+        false,
+    )
+}
+
+fn generation(name: &str, description: &str, placeholders: Option<&[String]>, image_tool: bool) -> ToolSpec {
+    let known = |p: &str| placeholders.is_some_and(|ph| ph.iter().any(|x| x == p));
+    let unknown = placeholders.is_none();
+    let mut props = serde_json::Map::new();
+    let mut required = Vec::new();
+    if image_tool || unknown || known("prompt") {
+        props.insert("prompt".into(), json!({"type": "string", "description": "What to generate."}));
+        if image_tool || known("prompt") {
+            required.push("prompt");
+        }
+    }
+    if known("negative_prompt") || unknown {
+        props.insert("negative_prompt".into(), json!({"type": "string", "description": "What to avoid."}));
+    }
+    for dim in ["width", "height"] {
+        if known(dim) || (unknown && image_tool) {
+            props.insert(dim.into(), json!({"type": "integer", "description": "Pixels (default 1024)."}));
+        }
+    }
+    if known("image") || (unknown && !image_tool) {
+        props.insert("image".into(), json!({"type": "string", "description": "Workspace path of the input image."}));
+        if known("image") {
+            required.push("image");
+        }
+    }
+    props.insert(
+        "seed".into(),
+        json!({"type": "integer", "description": "Fixed seed for a repeatable result; random when omitted."}),
+    );
+    props.insert(
+        "path".into(),
+        json!({"type": "string", "description": "Where to save in the workspace, e.g. assets/hero; the extension follows the output."}),
+    );
+    spec(name, description, json!({"type": "object", "properties": props, "required": required}))
+}
+
 pub fn wait_agents() -> ToolSpec {
     spec(
         "wait_agents",
@@ -394,5 +454,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn generation_params_follow_placeholders() {
+        let props = |t: ToolSpec| {
+            let p = t.parameters["properties"].as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+            (p, t.parameters["required"].clone())
+        };
+        let ph = vec!["image".to_string(), "seed".to_string()];
+        assert_eq!(
+            props(generate_3d(Some(&ph))),
+            (vec!["image".into(), "seed".into(), "path".into()], json!(["image"]))
+        );
+        let ph = vec!["prompt".to_string(), "width".to_string()];
+        assert_eq!(
+            props(generate_image(Some(&ph))),
+            (vec!["prompt".into(), "width".into(), "seed".into(), "path".into()], json!(["prompt"]))
+        );
+        let (p, req) = props(generate_image(None));
+        assert_eq!(p, vec!["prompt", "negative_prompt", "width", "height", "seed", "path"]);
+        assert_eq!(req, json!(["prompt"]));
     }
 }

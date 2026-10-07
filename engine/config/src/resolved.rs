@@ -1,6 +1,6 @@
 //! Concrete settings with defaults filled in.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -272,6 +272,22 @@ pub struct BrowserSettings {
     pub cdp_url: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComfyUiSettings {
+    pub url: Option<String>,
+    pub image_workflow: Option<String>,
+    pub model3d_workflow: Option<String>,
+    pub workflows_dir: PathBuf,
+    pub timeout: Duration,
+}
+
+impl ComfyUiSettings {
+    /// Path of a workflow by name.
+    pub fn workflow_path(&self, name: &str) -> PathBuf {
+        self.workflows_dir.join(format!("{name}.json"))
+    }
+}
+
 /// Fully-resolved settings for one scope (user or a project).
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -281,6 +297,8 @@ pub struct Settings {
     pub models: BTreeMap<String, ResolvedModel>,
     /// Role → model key, as configured (fallback to `main` happens at lookup).
     pub roles: BTreeMap<ModelRole, String>,
+    /// Discovered models hidden from the list (`<provider>:<model id>`).
+    pub hidden_models: BTreeSet<String>,
     pub permission_mode: PermissionMode,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub project_doc_max_bytes: usize,
@@ -294,6 +312,7 @@ pub struct Settings {
     pub hooks: HooksToml,
     pub computer_use: ComputerUseSettings,
     pub browser: BrowserSettings,
+    pub comfyui: ComfyUiSettings,
     pub memories_enabled: bool,
     pub memories_generate: bool,
     pub memories_max_tokens: u32,
@@ -346,6 +365,7 @@ impl Settings {
         let sb = cfg.sandbox.clone().unwrap_or_default();
         let cu = cfg.computer_use.clone().unwrap_or_default();
         let br = cfg.browser.clone().unwrap_or_default();
+        let comfy = cfg.comfyui.clone().unwrap_or_default();
         let mem = cfg.memories.clone().unwrap_or_default();
         let ar = cfg.automatic_review.clone().unwrap_or_default();
         let feats = cfg.features.clone().unwrap_or_default();
@@ -361,6 +381,7 @@ impl Settings {
             providers,
             models,
             roles,
+            hidden_models: cfg.hidden_models.iter().cloned().collect(),
             permission_mode,
             reasoning_effort: cfg.reasoning_effort,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(32 * 1024) as usize,
@@ -393,6 +414,17 @@ impl Settings {
                 blocked_sites: br.blocked_sites,
                 developer_mode: br.developer_mode.unwrap_or(false),
                 cdp_url: br.cdp_url,
+            },
+            comfyui: ComfyUiSettings {
+                url: comfy.url.map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| !u.is_empty()),
+                image_workflow: comfy.image_workflow.filter(|w| !w.is_empty()),
+                model3d_workflow: comfy.model3d_workflow.filter(|w| !w.is_empty()),
+                workflows_dir: comfy
+                    .workflows_dir
+                    .filter(|d| !d.is_empty())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.comfyui_dir()),
+                timeout: Duration::from_secs(comfy.timeout_secs.unwrap_or(900).max(10) as u64),
             },
             memories_enabled: mem.enabled.unwrap_or(false),
             memories_generate: mem.generate.unwrap_or(mem.enabled.unwrap_or(false)),

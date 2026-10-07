@@ -76,6 +76,7 @@ pub fn tool_specs(
         tools.push(specs::wait_agents());
     }
     tools.extend(crate::extensions::extra_tools(engine, rt, t, s, handle));
+    tools.extend(generation_specs(s));
     if matches!(mode, TurnMode::Plan | TurnMode::Review) {
         tools.retain(|tool| {
             READ_ONLY_TOOLS.contains(&tool.name.as_str()) || crate::extensions::is_read_only_extra(&tool.name)
@@ -85,6 +86,23 @@ pub fn tool_specs(
         }
     }
     tools
+}
+
+/// `generate_image` / `generate_3d` for the ComfyUI workflows the user picked.
+fn generation_specs(s: &Settings) -> Vec<ToolSpec> {
+    let c = &s.comfyui;
+    if c.url.is_none() {
+        return vec![];
+    }
+    let placeholders = |wf: &str| odex_comfyui::Workflow::load(&c.workflow_path(wf)).ok().map(|w| w.placeholders());
+    let mut v = Vec::new();
+    if let Some(wf) = &c.image_workflow {
+        v.push(specs::generate_image(placeholders(wf).as_deref()));
+    }
+    if let Some(wf) = &c.model3d_workflow {
+        v.push(specs::generate_3d(placeholders(wf).as_deref()));
+    }
+    v
 }
 
 fn hash_of<T: Hash>(t: &T) -> u64 {
@@ -270,6 +288,7 @@ async fn dispatch(o: &Out<'_>) -> ToolOutcome {
         "grep" => grep(o).await,
         "glob" => glob(o).await,
         "view_image" => view_image(o).await,
+        "generate_image" | "generate_3d" => generate(o).await,
         "update_plan" => update_plan(o),
         "read_output" => read_output(o),
         "recall" => recall(o),
@@ -1119,7 +1138,7 @@ async fn view_image(o: &Out<'_>) -> ToolOutcome {
         o.engine,
         o.rt,
         &o.tctx.turn_id,
-        ThreadItem::ImageView { id: format!("item_{}", o.call.id), path: path.clone() },
+        ThreadItem::ImageView { id: format!("item_{}", o.call.id), path: path.clone(), prompt: None },
     );
     if o.tctx.model.model.capabilities.vision {
         ToolOutcome {
@@ -1142,6 +1161,212 @@ async fn view_image(o: &Out<'_>) -> ToolOutcome {
             meta: o.meta(true),
             ..Default::default()
         }
+    }
+}
+
+// --------------------------------------------------------------- generation
+
+const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
+const MEDIA_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "glb", "gltf", "obj", "ply", "fbx", "stl"];
+/// Most files one run may write.
+const MAX_OUTPUTS: usize = 16;
+
+/// `generate_image` / `generate_3d`: run the user's ComfyUI workflow and save
+/// the files it produced into the workspace.
+async fn generate(o: &Out<'_>) -> ToolOutcome {
+    let comfy = &o.tctx.settings.comfyui;
+    let three_d = o.call.name == "generate_3d";
+    let workflow = if three_d { &comfy.model3d_workflow } else { &comfy.image_workflow };
+    let (Some(url), Some(wf_name)) = (comfy.url.as_deref(), workflow.as_deref()) else {
+        return o.err("ComfyUI generation is not set up (Settings → Models)");
+    };
+    let wf = match odex_comfyui::Workflow::load(&comfy.workflow_path(wf_name)) {
+        Ok(w) => w,
+        Err(e) => return o.err(format!("ComfyUI workflow `{wf_name}`: {e}")),
+    };
+    let text =
+        |k: &str| o.args.get(k).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()).map(String::from);
+    let num = |k: &str| o.args.get(k).and_then(|v| v.as_u64());
+    let prompt = text("prompt");
+    if !three_d && !wf.has("prompt") {
+        return o.err(format!(
+            "the ComfyUI workflow `{wf_name}` has no {{{{prompt}}}} placeholder, so every image would come out the same. \
+             Ask the user to type {{{{prompt}}}} into its positive prompt box and export it again with Workflow → Export (API)."
+        ));
+    }
+
+    let cwd = o.cwd();
+    let item_id = format!("item_{}", o.call.id);
+    let default_ext = if three_d { "glb" } else { "png" };
+    let stem = match text("path") {
+        Some(p) => strip_media_ext(&p),
+        None => {
+            let fallback = if three_d { "model" } else { "image" };
+            unique_stem(
+                &cwd,
+                &format!("generated/{}", slug(prompt.as_deref().unwrap_or(fallback), fallback)),
+                default_ext,
+            )
+        }
+    };
+    let planned = format!("{stem}.{default_ext}");
+    o.start_generic();
+    let change = FileChange {
+        path: planned.clone(),
+        kind: FileChangeKind::Add,
+        move_path: None,
+        diff: String::new(),
+        additions: 0,
+        deletions: 0,
+    };
+    if let Err(out) = approve_writes(o, &[odex_tools::edit::resolve(&cwd, &planned)], &[change], &item_id).await {
+        o.done_generic(false, &out.text);
+        return out;
+    }
+    let fail = |msg: String| {
+        o.done_generic(false, &msg);
+        o.err(msg)
+    };
+
+    let client = odex_comfyui::ComfyClient::new(url);
+    let mut inputs = odex_comfyui::Inputs {
+        prompt: prompt.clone(),
+        negative_prompt: text("negative_prompt"),
+        width: num("width"),
+        height: num("height"),
+        seed: num("seed"),
+        image: None,
+    };
+    if let Some(img) = text("image") {
+        let full = odex_tools::edit::resolve(&cwd, &img);
+        let bytes = match tokio::fs::read(&full).await {
+            Ok(b) => b,
+            Err(e) => return fail(format!("cannot read {img}: {e}")),
+        };
+        let name = full.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "input.png".into());
+        match client.upload_image(&name, bytes).await {
+            Ok(n) => inputs.image = Some(n),
+            Err(e) => return fail(format!("{e:#}")),
+        }
+    }
+    let graph = match wf.fill(&inputs) {
+        Ok(g) => g,
+        Err(e) => return fail(format!("ComfyUI workflow `{wf_name}`: {e}")),
+    };
+    let id = match client.queue(&graph).await {
+        Ok(id) => id,
+        Err(e) => return fail(format!("{e:#}")),
+    };
+    let done = tokio::select! {
+        r = client.wait(&id, comfy.timeout) => r,
+        _ = o.tctx.cancel.cancelled() => Err(anyhow::anyhow!("interrupted")),
+    };
+    let files = match done {
+        Ok(f) if f.is_empty() => {
+            return fail(format!(
+                "the workflow `{wf_name}` finished without saving any files; it needs an output node such as SaveImage or SaveGLB"
+            ))
+        }
+        Ok(f) => f,
+        Err(e) => {
+            client.cancel(&id).await;
+            return fail(format!("{e:#}"));
+        }
+    };
+
+    let mut saved: Vec<(String, usize)> = Vec::new();
+    for (i, f) in files.iter().take(MAX_OUTPUTS).enumerate() {
+        let ext = f.extension();
+        let rel = if i == 0 { format!("{stem}.{ext}") } else { format!("{stem}-{}.{ext}", i + 1) };
+        let bytes = match client.download(f).await {
+            Ok(b) => b,
+            Err(e) => return fail(format!("{e:#}")),
+        };
+        let full = odex_tools::edit::resolve(&cwd, &rel);
+        let write = async {
+            if let Some(dir) = full.parent() {
+                tokio::fs::create_dir_all(dir).await?;
+            }
+            tokio::fs::write(&full, &bytes).await
+        };
+        if let Err(e) = write.await {
+            return fail(format!("could not write {rel}: {e}"));
+        }
+        saved.push((rel, bytes.len()));
+    }
+    let mut srcs = Vec::new();
+    for (rel, _) in &saved {
+        srcs = o.rt.touch_source(rel, false, true);
+    }
+    o.engine.emitter().sources(&o.rt.id, srcs);
+    let list = saved.iter().map(|(p, n)| format!("{p} ({})", human_size(*n))).collect::<Vec<_>>().join(", ");
+    o.done_generic(true, &format!("Saved {list}"));
+    for (i, (rel, _)) in saved.iter().enumerate() {
+        if IMAGE_EXTS.contains(&ext_of(rel).as_str()) {
+            let item = ThreadItem::ImageView {
+                id: format!("{item_id}_{i}"),
+                path: rel.clone(),
+                prompt: Some(prompt.clone().unwrap_or_default()),
+            };
+            complete_item(o.engine, o.rt, &o.tctx.turn_id, item);
+        }
+    }
+    let mut meta = o.meta(true);
+    meta.file_writes = saved.iter().map(|(p, _)| p.clone()).collect();
+    let hint = if saved.iter().any(|(p, _)| IMAGE_EXTS.contains(&ext_of(p).as_str())) {
+        " Use view_image to look at an image."
+    } else {
+        ""
+    };
+    ToolOutcome { text: format!("ComfyUI workflow `{wf_name}` saved {list}.{hint}"), meta, ..Default::default() }
+}
+
+fn ext_of(path: &str) -> String {
+    Path::new(path).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
+}
+
+/// `assets/hero.png` → `assets/hero`; other dotted names are kept whole.
+fn strip_media_ext(path: &str) -> String {
+    if MEDIA_EXTS.contains(&ext_of(path).as_str()) {
+        path[..path.len() - ext_of(path).len() - 1].to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+/// File-name stem from the first words of a prompt.
+fn slug(text: &str, fallback: &str) -> String {
+    let mut s = String::new();
+    for w in text.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).take(6) {
+        if s.chars().count() + w.chars().count() > 40 {
+            break;
+        }
+        if !s.is_empty() {
+            s.push('-');
+        }
+        s.push_str(&w.to_lowercase());
+    }
+    if s.is_empty() {
+        fallback.to_string()
+    } else {
+        s
+    }
+}
+
+/// `base`, or `base-2`, `base-3`, ... when `base.<ext>` already exists.
+fn unique_stem(cwd: &Path, base: &str, ext: &str) -> String {
+    let taken = |stem: &str| odex_tools::edit::resolve(cwd, &format!("{stem}.{ext}")).exists();
+    if !taken(base) {
+        return base.to_string();
+    }
+    (2..).map(|n| format!("{base}-{n}")).find(|s| !taken(s)).unwrap()
+}
+
+fn human_size(n: usize) -> String {
+    if n >= 1 << 20 {
+        format!("{:.1} MB", n as f64 / (1u64 << 20) as f64)
+    } else {
+        format!("{} KB", n.div_ceil(1024))
     }
 }
 

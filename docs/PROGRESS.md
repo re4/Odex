@@ -25,10 +25,10 @@ All built and tested on Windows 11. `cargo test --workspace`, `cargo clippy --wo
 - `protocol`: wire types, method registry, TS codegen (`odex-engine generate-ts`).
 - `config`: `~/.odex`, layering, profiles, comment-preserving edits, presets (`presets/models.toml`, verified against vLLM 0.30).
 - `llm`: streaming client, retries, overflow parsing, fallback tool parsers, JSON repair and validation, registry, Doctor, loop guard.
-- `mock-vllm`: axum mock with SSE fixtures, faults, `max_model_len` enforcement, JSON rule policies and `/__mock/*` control endpoints.
+- `mock-vllm`: axum mock with SSE fixtures, faults, `max_model_len` enforcement, JSON rule policies and `/__mock/*` control endpoints, plus a mock ComfyUI (`comfy`, `--comfy-port`).
 - `context`: budget, Tier 1 pruning, Tier 2 compaction (map-reduce, verbatim requirements, extractive fallback), Tier 3 emergency trim, template normalization.
 - `tools`: tool schemas (codex/extended/minimal/compact), output capping and refs, edit/write ops.
-- `apply-patch`, `execpolicy`, `sandbox`, `hooks`, `file-search`, `git`, `mcp-client`, `computer-use`, `browser-bridge`, `automations`, `memories`: see each crate's docs.
+- `apply-patch`, `execpolicy`, `sandbox`, `hooks`, `file-search`, `git`, `mcp-client`, `computer-use`, `browser-bridge`, `comfyui`, `automations`, `memories`: see each crate's docs.
 - `core`: the engine (threads, turns, approvals, tools, extensions, subagents, background jobs, store, rollouts).
 - `app-server`: JSON-RPC stdio server. `exec`: headless runs. `cli`: the `odex-engine` binary.
 

@@ -149,12 +149,15 @@ pub async fn dispatch(engine: &Engine, sink: &RpcSink, method: &str, p: Option<V
         m::REVIEW_START => ok(api::review_start(engine, params(p)?).await?),
 
         m::MODEL_LIST => ok(api::model_list(engine)),
+        m::MODEL_REMOVE => ok(api::model_remove(engine, params(p)?)?),
         m::PROVIDER_LIST => ok(api::provider_list(engine, params(p)?).await),
         m::PROVIDER_UPSERT => ok(api::provider_upsert(engine, params(p)?).await?),
         m::PROVIDER_REMOVE => ok(api::provider_remove(engine, params(p)?).await?),
         m::PROVIDER_TEST => ok(api::provider_test(engine, params(p)?).await?),
         m::DOCTOR_RUN => ok(api::doctor_run(engine, params(p)?).await?),
         m::PRESET_LIST => ok(api::preset_list(engine)),
+        m::COMFYUI_STATUS => ok(api::comfy_status(engine).await),
+        m::COMFYUI_IMPORT => ok(api::comfy_import(engine, params(p)?).await?),
 
         m::CONFIG_READ => ok(api::config_read(engine)),
         m::CONFIG_WRITE => ok(api::config_write(engine, params(p)?)?),

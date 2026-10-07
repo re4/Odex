@@ -14,6 +14,7 @@ members = [
     "mcp-client",
     "computer-use",
     "browser-bridge",
+    "comfyui",
     "automations",
     "memories",
     "tools",
@@ -46,6 +47,7 @@ odex-git = { path = "git" }
 odex-mcp-client = { path = "mcp-client" }
 odex-computer-use = { path = "computer-use" }
 odex-browser-bridge = { path = "browser-bridge" }
+odex-comfyui = { path = "comfyui" }
 odex-automations = { path = "automations" }
 odex-memories = { path = "memories" }
 odex-tools = { path = "tools" }

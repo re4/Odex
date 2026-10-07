@@ -11,6 +11,7 @@ Contents:
 [`[model_providers]`](#model_providersid) ·
 [`[models]`](#modelskey) ·
 [`[roles]`](#roles) ·
+[`[comfyui]`](#comfyui) ·
 [`[context]`](#context) ·
 [`[sandbox]`](#sandbox) ·
 [`[mcp_servers]` / `[mcp]`](#mcp_serversname) ·
@@ -50,6 +51,7 @@ Set `ODEX_HOME` (or pass `odex-engine --home <dir>`) to use a directory other th
 | `~/.odex/rules/*.toml` | Exec-policy rules: command prefixes marked `allow`, `prompt` or `forbid`. |
 | `~/.odex/memories/` | Approved and proposed memories: `global.json` and `MEMORIES.md`, plus one file per project under `projects/`. |
 | `~/.odex/models_cache.json` | Discovered models, Doctor results and calibrated chars-per-token ratios. |
+| `~/.odex/comfyui/*.json` | ComfyUI workflows for image and 3D generation (see [`[comfyui]`](#comfyui)). |
 | `~/.odex/trusted_hooks.json` | Hashes of hooks you approved in the trust review. |
 | `~/.odex/mcp_tokens.json` | OAuth tokens for MCP HTTP servers (written by the engine). |
 | `~/.odex/secrets.json` | Endpoint API keys and the GitHub token, encrypted by the desktop app (see [Secrets](#secrets)). |
@@ -99,6 +101,7 @@ Odex merges settings in this order. A later layer wins key by key, and tables me
 | `default_shell` | string | `powershell` on Windows, `zsh` on macOS, else `bash` | Shell for the agent's `shell` tool: `powershell`, `pwsh`, `cmd`, `bash`, `zsh` or `sh`. |
 | `worktrees_dir` | path | `~/.odex/worktrees` | Root directory for thread worktrees. |
 | `review_instructions` | string | none | Standing guidelines appended to every review the agent runs (`/review`, "Ask agent to review"). Settings → Code review. The reviewer model is `roles.reviewer`. |
+| `hidden_models` | array of `provider:served-model-id` | `[]` | Discovered models left out of the model list, the pickers and bare-id lookup. The trash button in Settings → Models & Endpoints adds to it (and deletes a model's `[models]` entry and any role pointing at it); "Removed models" there restores one. A `[models.<key>]` entry for the same model still shows. |
 
 ```toml
 model = "coder"
@@ -211,6 +214,39 @@ main = "coder"
 compactor = "gpu1:Qwen/Qwen3-30B-A3B-Instruct-2507"
 utility = "gpu1:Qwen/Qwen3-30B-A3B-Instruct-2507"
 vision = "vl"
+```
+
+Image and 3D generation are roles too in Settings, but they pick ComfyUI workflows rather than chat models; see [`[comfyui]`](#comfyui).
+
+## `[comfyui]`
+
+Image and 3D generation through a [ComfyUI](https://github.com/comfyanonymous/ComfyUI) server. With a URL and a workflow set, the agent gets `generate_image` and/or `generate_3d`. Each run queues the workflow on `/prompt`, waits for it on `/history`, and saves every file its output nodes wrote (`SaveImage`, `SaveGLB`, ...) into the workspace, by default as `generated/<first prompt words>.<ext>` (never overwriting). Writes follow the thread's permission mode like any file edit. Not offered in plan or review mode.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `url` | string | none | Server URL, for example `http://127.0.0.1:8188`. Generation is off without it. |
+| `image_workflow` | string | none | Workflow (file name without `.json`) behind `generate_image`. Settings → Models & Endpoints → Roles → Image generation. |
+| `model3d_workflow` | string | none | Workflow behind `generate_3d`. |
+| `workflows_dir` | path | `~/.odex/comfyui` | Folder of workflow files. "Import workflow" in Settings copies a file here after checking it. |
+| `timeout_secs` | integer | `900` | Longest wait for one run. An interrupted turn removes the run from ComfyUI's queue. |
+
+Workflows are **API-format** exports (in ComfyUI: Workflow → Export (API)). Before exporting, type placeholders into the widgets the agent should fill:
+
+| Placeholder | Filled with |
+|---|---|
+| `{{prompt}}` | The agent's prompt. Required for image workflows. |
+| `{{negative_prompt}}` | What to avoid (empty when not given). |
+| `{{width}}`, `{{height}}` | Pixels, default 1024. A widget holding only the placeholder gets a number. |
+| `{{seed}}` | The agent's seed, else random. Without this placeholder, every `seed` / `noise_seed` input gets a fresh random seed per run, like ComfyUI's "randomize". |
+| `{{image}}` | A workspace image the agent passes as `image`; Odex uploads it with `/upload/image`. Put it in a Load Image node for image-to-3D. |
+
+The tools' parameters follow the placeholders the workflow uses. `[models.<key>]` settings do not apply here.
+
+```toml
+[comfyui]
+url = "http://127.0.0.1:8188"
+image_workflow = "flux-dev"
+model3d_workflow = "hunyuan3d-2"
 ```
 
 ## `[context]`

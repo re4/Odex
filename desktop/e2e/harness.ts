@@ -26,34 +26,39 @@ export interface MockRule {
 
 export interface Mock {
   url: string
+  /** Mock ComfyUI root, when started with `{ comfy: true }`. */
+  comfyUrl?: string
   proc: ChildProcess
   requests(): Promise<any[]>
   stop(): void
 }
 
-/** Start `odex-mock-vllm` on a free port with a rule policy. */
-export async function startMock(rules: MockRule[], opts: { maxModelLen?: number; models?: string[] } = {}): Promise<Mock> {
+/** Start `odex-mock-vllm` on a free port with a rule policy (plus a mock ComfyUI with `comfy`). */
+export async function startMock(rules: MockRule[], opts: { maxModelLen?: number; models?: string[]; comfy?: boolean } = {}): Promise<Mock> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odex-mock-'))
   const rulesPath = path.join(dir, 'rules.json')
   fs.writeFileSync(rulesPath, JSON.stringify({ rules }))
   const args = ['--port', '0', '--rules', rulesPath, '--max-model-len', String(opts.maxModelLen ?? 32768), '--delay-ms', '1']
   for (const m of opts.models ?? ['mock-coder']) args.push('--model', m)
+  if (opts.comfy) args.push('--comfy-port', '0')
   const proc = spawn(binary('odex-mock-vllm'), args, { stdio: ['ignore', 'pipe', 'pipe'] })
-  const url = await new Promise<string>((resolve, reject) => {
+  const [url, comfyUrl] = await new Promise<[string, string | undefined]>((resolve, reject) => {
     let buf = ''
     const t = setTimeout(() => reject(new Error(`mock did not start: ${buf}`)), 15_000)
     proc.stdout!.on('data', (d) => {
       buf += String(d)
-      const m = /listening on (\S+)/.exec(buf)
-      if (m) {
+      const m = /vllm listening on (\S+)/.exec(buf)
+      const c = /comfyui listening on (\S+)/.exec(buf)
+      if (m && (c || !opts.comfy)) {
         clearTimeout(t)
-        resolve(m[1].replace(/\/$/, '').replace(/\/v1$/, ''))
+        resolve([m[1].replace(/\/$/, '').replace(/\/v1$/, ''), c?.[1]])
       }
     })
     proc.on('exit', (c) => reject(new Error(`mock exited ${c}: ${buf}`)))
   })
   return {
     url,
+    comfyUrl,
     proc,
     requests: async () => (await (await fetch(`${url}/__mock/requests`)).json()) as any[],
     stop: () => proc.kill(),

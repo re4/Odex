@@ -44,4 +44,8 @@ llm: boolean, status: ItemStatus, } | { "type": "computerUse", id: string, actio
 /**
  * Thumbnails stored under ~/.odex/media (paths) or data URLs.
  */
-beforeImage?: string | null, afterImage?: string | null, } | { "type": "browser", id: string, action: string, arguments: JsonValue, status: ItemStatus, url?: string | null, output?: string | null, image?: string | null, } | { "type": "imageView", id: string, path: string, } | { "type": "review", id: string, summary: string, findings: Array<ReviewFinding>, overallCorrectness?: string | null, } | { "type": "notice", id: string, level: NoticeLevel, message: string, code?: string | null, } | { "type": "error", id: string, message: string, };
+beforeImage?: string | null, afterImage?: string | null, } | { "type": "browser", id: string, action: string, arguments: JsonValue, status: ItemStatus, url?: string | null, output?: string | null, image?: string | null, } | { "type": "imageView", id: string, path: string, 
+/**
+ * Set when `generate_image` created the file.
+ */
+prompt?: string | null, } | { "type": "review", id: string, summary: string, findings: Array<ReviewFinding>, overallCorrectness?: string | null, } | { "type": "notice", id: string, level: NoticeLevel, message: string, code?: string | null, } | { "type": "error", id: string, message: string, };

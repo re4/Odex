@@ -1388,6 +1388,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "odex-comfyui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "odex-mock-vllm",
+ "odex-protocol",
+ "rand 0.8.8",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "odex-computer-use"
 version = "0.1.0"
 dependencies = [
@@ -1450,6 +1465,7 @@ dependencies = [
  "odex-apply-patch",
  "odex-automations",
  "odex-browser-bridge",
+ "odex-comfyui",
  "odex-computer-use",
  "odex-config",
  "odex-context",
@@ -1644,6 +1660,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "bytes",
  "clap",
  "futures",
