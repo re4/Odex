@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { FolderOpen, LayoutPanelLeft, RefreshCw, Wand2 } from 'lucide-react'
-import { PROTOCOL_VERSION } from '@shared/index'
+import { Download, ExternalLink, FolderOpen, LayoutPanelLeft, RefreshCw, Wand2 } from 'lucide-react'
+import { PROTOCOL_VERSION, type UpdateState } from '@shared/index'
 import { useApp } from '@/store/app'
 import { toast } from '@/lib/rpc'
 import { confirmDialog } from '@/lib/actions'
-import { Row } from '@/views/settings/GeneralSettings'
+import { Toggle, relativeTime } from '@/components/ui'
+import { Row, useSetting } from '@/views/settings/GeneralSettings'
 import { Callout, Section } from '@/views/settings/ConfigSettings'
 import pkg from '../../../../package.json'
 
@@ -58,6 +59,8 @@ export function AboutSettings() {
         )}
       </Section>
 
+      <UpdatesSection />
+
       <Section title="Data">
         <dl className="sx-kv">
           <dt>Odex home</dt>
@@ -101,7 +104,7 @@ export function AboutSettings() {
             <b>No telemetry.</b>
           </div>
           Odex sends nothing about you or your usage anywhere. It only talks to the model endpoints you configure
-          {providers.length ? ` (${providers.map((p) => p.name).join(', ')})` : ''}, the MCP servers you add, and the websites you or the agent open in the built-in browser. Threads, memories, usage stats and settings stay in the Odex home folder on this computer.
+          {providers.length ? ` (${providers.map((p) => p.name).join(', ')})` : ''}, the MCP servers you add, the websites you or the agent open in the built-in browser, and the GitHub releases page when it checks for updates (see Updates above). Threads, memories, usage stats and settings stay in the Odex home folder on this computer.
         </Callout>
       </Section>
 
@@ -139,5 +142,85 @@ export function AboutSettings() {
         </Row>
       </Section>
     </div>
+  )
+}
+
+function megabytes(n: number): string {
+  return `${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`
+}
+
+function updateStatus(u: UpdateState): string {
+  const checked = u.checkedAt ? ` Checked ${relativeTime(u.checkedAt) === 'now' ? 'just now' : `${relativeTime(u.checkedAt)} ago`}.` : ''
+  switch (u.status) {
+    case 'unsupported':
+      return u.reason ?? 'This build can’t update itself.'
+    case 'idle':
+      return 'Not checked yet.'
+    case 'checking':
+      return 'Checking for updates…'
+    case 'not-available':
+      return `Odex ${u.currentVersion} is the latest version.${checked}`
+    case 'available':
+      return `Odex ${u.version} is available (you have ${u.currentVersion}).`
+    case 'downloading': {
+      const p = u.progress
+      return `Downloading Odex ${u.version}… ${Math.floor(p?.percent ?? 0)}%${p?.total ? ` (${megabytes(p.transferred)} of ${megabytes(p.total)})` : ''}`
+    }
+    case 'downloaded':
+      return `Odex ${u.version} is downloaded and ready to install.`
+    case 'error':
+      return `Couldn’t update.${checked}`
+  }
+}
+
+/** Check, download and install updates from the GitHub releases page (main/updater.ts). */
+function UpdatesSection() {
+  const u = useApp((s) => s.update)
+  const [auto, setAuto] = useSetting('autoUpdate')
+  if (!u) return null
+  const unsupported = u.status === 'unsupported'
+  const busy = u.status === 'checking' || u.status === 'downloading'
+  return (
+    <Section title="Updates">
+      <div className="row" style={{ gap: 8, alignItems: 'center' }} data-testid="update-status">
+        <span className="grow selectable">{updateStatus(u)}</span>
+        {u.status === 'available' && (
+          <button className="btn btn-sm btn-primary" onClick={() => void window.odex.updates.download()}>
+            <Download size={13} /> Download
+          </button>
+        )}
+        {u.status === 'downloaded' ? (
+          <button className="btn btn-sm btn-primary" onClick={() => void window.odex.updates.install()}>
+            <Download size={13} /> Restart and update
+          </button>
+        ) : (
+          !unsupported && (
+            <button className="btn btn-sm" disabled={busy} onClick={() => void window.odex.updates.check()}>
+              <RefreshCw size={13} /> Check for updates
+            </button>
+          )
+        )}
+        <button className="btn btn-sm" onClick={() => void window.odex.shell.openExternal(u.releaseUrl)}>
+          <ExternalLink size={13} /> {u.version && !unsupported ? 'Release notes' : 'Releases'}
+        </button>
+      </div>
+      {u.status === 'downloading' && (
+        <div className="update-progress" role="progressbar" aria-label="Update download" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.floor(u.progress?.percent ?? 0)}>
+          <div style={{ width: `${u.progress?.percent ?? 0}%` }} />
+        </div>
+      )}
+      {u.status === 'error' && u.error && (
+        <div style={{ marginTop: 8 }}>
+          <Callout kind="danger">
+            <span className="selectable">{u.error}</span>
+          </Callout>
+        </div>
+      )}
+      {!unsupported && (
+        <Row label="Update automatically" hint="Check the GitHub releases page at startup and every few hours, and download new versions in the background. Odex always asks before installing.">
+          <Toggle checked={auto ?? true} onChange={setAuto} label="Update automatically" />
+        </Row>
+      )}
+    </Section>
   )
 }

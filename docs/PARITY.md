@@ -327,7 +327,7 @@ Status lives in `docs/PROGRESS.md`. A row that is "keep" is done only when it is
 |---|---|---|---|
 | Appshots (capture window + accessible text) with a hotkey | keep | PROMPT §9 | M9 |
 | Multi-window, per-window state | keep | | M10 |
-| In-app updates | adapt | **Deferred** until releases are published: self-update needs a signed release feed (electron-updater + GitHub Releases) and code-signing certificates. Installers are built by CI on tags | M10 |
+| In-app updates | adapt | electron-updater against GitHub Releases (`desktop/main/updater.ts`): background check and download, SHA-512 check, then a prompt to restart and install; Settings → About; opt-out. Unsigned Windows builds update; macOS needs signing; MSIX is updated by Windows (D-039) | M10 |
 | `/feedback` with log upload | cut | No telemetry. "Open logs folder" instead | — |
 | Codex Micro, Voice, Pets, Sites, Dots, Space, Remote control | cut | PROMPT Cut | — |
 | Profile / insight cards / referrals / rate limits / sign-in | cut | PROMPT Cut | — |

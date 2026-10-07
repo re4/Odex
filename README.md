@@ -44,6 +44,7 @@ Odex has two parts. A headless Rust engine (`odex-engine`) runs the agent: threa
 - Scheduled and thread automations with a review queue.
 - Opt-in local memories.
 - Notifications and a tray icon.
+- In-app updates from GitHub Releases: new versions download in the background and Odex asks before restarting to install them (Settings → About; can be turned off).
 
 **PC control**
 - Computer use, Windows first: background screenshots, UI Automation trees and actions, per-app allowlists, a kill switch, and before/after screenshots logged in the thread.
@@ -223,6 +224,20 @@ npm run dist:linux    # AppImage + deb
 ```
 
 Each `dist*` script stages the release engine into `desktop/build/bin` (`scripts/prepare-engine.mjs`), builds the app and runs electron-builder with [`desktop/electron-builder.yml`](desktop/electron-builder.yml). Builds are unsigned unless you provide signing credentials through the standard electron-builder environment variables. The MSIX identity fields in that file are placeholders until the app has a Partner Center listing. Tagged commits (`v*`) build installers in CI and attach them to a draft GitHub release.
+
+### Releases and updates
+
+Installed copies update themselves from the [GitHub releases page](https://github.com/re4/Odex/releases) with [electron-updater](https://www.electron.build/auto-update) ([`desktop/main/updater.ts`](desktop/main/updater.ts)). The app checks the latest release at startup and every 4 hours, downloads a newer version in the background, verifies its SHA-512, and then asks to restart and install it. Settings → About shows the status, has **Check for updates**, and can turn automatic updates off (then a check only offers the download).
+
+For that to work, a release must carry the update metadata next to the installers:
+
+| Platform | Upload |
+|---|---|
+| Windows | `Odex-Setup-<version>-x64.exe`, its `.blockmap` and `latest.yml` |
+| macOS | the `.zip` (and `.dmg`), their `.blockmap` files and `latest-mac.yml` (updates need a signed build) |
+| Linux | the `.AppImage` / `.deb` and `latest-linux.yml` |
+
+The CI release job uploads all of these. When publishing by hand, upload the files from `desktop/release/`, publish the release (drafts and pre-releases are ignored), and tag it `v<version>` to match `package.json`. The MSIX package is updated by Windows, not by Odex. `ODEX_UPDATE_URL` points the updater at another feed (any folder served over HTTP with `latest.yml` and the installers), for mirrors and tests. Updater logs go to `~/.odex/logs/updater.log`.
 
 ## Documentation
 

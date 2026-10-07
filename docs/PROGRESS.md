@@ -78,14 +78,15 @@ The suite has been verified against `odex-mock-vllm` with a rules file. It has *
 **Packaging.**
 - `npm run dist:win` (in `desktop/`, after `cargo build --release -p odex-engine`) produces `desktop/release/Odex-Setup-<version>-x64.exe` (NSIS) and `Odex-<version>-x64.msix`.
 - To check a package, launch `release/win-unpacked/Odex.exe` with a temporary `ODEX_HOME`: the engine should start from `resources/bin` and a terminal should open (node-pty unpacked from the asar).
+- `dist*` also writes `latest.yml` (`latest-mac.yml`, `latest-linux.yml`) and `.blockmap` files; the in-app updater needs them on the GitHub release (README "Releases and updates"). v0.1.0 was published without them, so 0.1.0 installs can't update themselves: users of 0.1.0 install 0.1.1 by hand once.
 
 ## Desktop e2e coverage
 
-`desktop/e2e/` (118 tests: 117 pass on Windows, 1 opt-in screenshot test skips): onboarding, composer (drag-drop, grouped `@` mentions, `/` mid-draft, branch/environment chips, starter prompts), goal pause/resume/edit, model-change warnings, rollback/redo, `/status` and `/doctor`, Mermaid, lightbox, Ask Odex, Git settings and PR flows against a fake GitHub, environments/worktree retention/move-to-worktree, background sessions, side-panel layout, HTML preview, summary card, always-allow rules, MCP instructions, Quick Chat, thread end to end, approvals (exec escalation), plan mode, `/compact`, terminal, `!cmd`, edit and resend, find, project actions, undo, deep links, review pane (stage/revert/comment, hunks, big diffs, hand-off), files and editor, browser panel and agent browser use, MCP/skills/plugins/hooks, all settings panels with persistence, automations and Activity, and visual snapshots of home and thread in light and dark.
+`desktop/e2e/` (124 tests: 123 pass on Windows, 1 opt-in screenshot test skips): onboarding, composer (drag-drop, grouped `@` mentions, `/` mid-draft, branch/environment chips, starter prompts), goal pause/resume/edit, model-change warnings, rollback/redo, `/status` and `/doctor`, Mermaid, lightbox, Ask Odex, Git settings and PR flows against a fake GitHub, environments/worktree retention/move-to-worktree, background sessions, side-panel layout, HTML preview, summary card, always-allow rules, MCP instructions, Quick Chat, thread end to end, approvals (exec escalation), plan mode, `/compact`, terminal, `!cmd`, edit and resend, find, project actions, undo, deep links, review pane (stage/revert/comment, hunks, big diffs, hand-off), files and editor, browser panel and agent browser use, MCP/skills/plugins/hooks, all settings panels with persistence, automations and Activity, app updates against a local release feed (check, background download, checksum failure, the restart prompt; Windows only), and visual snapshots of home and thread in light and dark.
 
 ## Parity
 
-A full audit of every keep/adapt/add row in `docs/PARITY.md` (205 rows) found 70 partial or missing rows; all were implemented in the follow-up round except three, which are marked **Deferred** in PARITY.md with reasons: macOS/Linux computer use, in-app self-update, and the Landlock fallback sandbox.
+A full audit of every keep/adapt/add row in `docs/PARITY.md` (205 rows) found 70 partial or missing rows; all were implemented in the follow-up round except three, which were marked **Deferred** in PARITY.md with reasons: macOS/Linux computer use, in-app self-update, and the Landlock fallback sandbox. In-app updates landed in 0.1.1 (D-039).
 
 ## Next
 

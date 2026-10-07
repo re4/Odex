@@ -55,7 +55,7 @@ Set `ODEX_HOME` (or pass `odex-engine --home <dir>`) to use a directory other th
 | `~/.odex/trusted_hooks.json` | Hashes of hooks you approved in the trust review. |
 | `~/.odex/mcp_tokens.json` | OAuth tokens for MCP HTTP servers (written by the engine). |
 | `~/.odex/secrets.json` | Endpoint API keys and the GitHub token, encrypted by the desktop app (see [Secrets](#secrets)). |
-| `~/.odex/desktop.json` | Desktop-only preferences: theme, fonts, shortcuts, notifications, keep-awake, tray. |
+| `~/.odex/desktop.json` | Desktop-only preferences: theme, fonts, shortcuts, notifications, keep-awake, tray, automatic updates (`autoUpdate`). |
 | `~/.odex/logs/`, `~/.odex/tmp/` | Logs and scratch space. |
 
 Exec-policy rule files look like this:

@@ -52,5 +52,5 @@ export const SETTINGS_PANELS: SettingsPanelDef[] = [
   { id: 'environments', label: 'Local environments', group: 'Advanced', component: EnvironmentsSettings, keywords: 'setup script worktree environment variables per-os environments.toml' },
   { id: 'archived', label: 'Archived threads', group: 'Advanced', component: ArchivedSettings, keywords: 'restore delete' },
   { id: 'config', label: 'Config & profiles', group: 'Advanced', component: ConfigSettings, keywords: 'config.toml profiles raw' },
-  { id: 'about', label: 'About & data', group: 'Advanced', component: AboutSettings, keywords: 'version logs reset privacy' },
+  { id: 'about', label: 'About & data', group: 'Advanced', component: AboutSettings, keywords: 'version update updates upgrade releases logs reset privacy' },
 ]

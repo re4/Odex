@@ -258,6 +258,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      # latest*.yml and the .blockmap files are what the in-app updater (desktop/main/updater.ts) reads.
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
@@ -267,8 +268,11 @@ jobs:
             desktop/release/*.exe
             desktop/release/*.msix
             desktop/release/*.dmg
+            desktop/release/*.zip
             desktop/release/*.AppImage
             desktop/release/*.deb
+            desktop/release/*.blockmap
+            desktop/release/latest*.yml
 
   release:
     name: Draft GitHub release

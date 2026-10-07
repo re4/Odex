@@ -51,8 +51,15 @@ protocols:
     schemes:
       - odex
 
-# Never publish from electron-builder; the release workflow uploads artifacts with `gh release`.
-publish: null
+# Auto-updates (main/updater.ts) read GitHub releases. electron-builder never uploads anything itself (the
+# dist scripts pass `--publish never`; the release workflow uploads with `gh release`), but this config makes
+# it write resources/app-update.yml into the app and latest.yml / latest-mac.yml / latest-linux.yml next
+# to the installers. Every release must carry those files (and the .blockmap files) for updates to work.
+publish:
+  provider: github
+  owner: re4
+  repo: Odex
+  releaseType: release
 
 win:
   icon: resources/icon.png
@@ -92,6 +99,8 @@ mac:
   category: public.app-category.developer-tools
   target:
     - dmg
+    # electron-updater installs macOS updates from the zip (signed builds only).
+    - zip
   hardenedRuntime: true
   # Signing and notarization happen only when CSC_LINK and the APPLE_* variables are set.
 

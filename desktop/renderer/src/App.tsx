@@ -24,6 +24,7 @@ import { QuickChat } from '@/views/QuickChat'
 import { AskOdex } from '@/components/AskOdex'
 import { ImageLightbox } from '@/components/ImageLightbox'
 import { DoctorHost } from '@/views/DoctorModal'
+import { UpdatePrompt } from '@/views/UpdatePrompt'
 import { handleDeepLink } from '@/lib/deeplinks'
 
 function applyTheme(): void {
@@ -191,6 +192,7 @@ export function App() {
       }),
       window.odex.onNativeTheme(() => applyTheme()),
       window.odex.onKillSwitch((on) => useApp.setState({ killSwitch: on })),
+      window.odex.updates.onState((u) => useApp.setState({ update: u })),
       window.odex.onDeepLink((url) => void handleDeepLink(url)),
       window.odex.onCommand((c) => {
         if (c.command === 'newThread') void useApp.getState().selectThread(null)
@@ -223,6 +225,10 @@ export function App() {
         })
       })(),
     ]
+    void window.odex.updates
+      .state()
+      .then((u) => useApp.setState({ update: u }))
+      .catch(() => {})
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
     mq.addEventListener('change', applyTheme)
     return () => {
@@ -358,6 +364,7 @@ export function App() {
           </button>
         </div>
       )}
+      <UpdatePrompt />
       <div className="main">
         {ui.sidebarOpen && !ui.popout && (
           <>
