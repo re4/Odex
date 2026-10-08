@@ -275,6 +275,11 @@ pub struct BrowserSettings {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComfyUiSettings {
     pub url: Option<String>,
+    /// Config-provided key (env or plain). The desktop's `comfyui:api_key`
+    /// secret takes precedence at request time.
+    pub api_key: Option<String>,
+    pub api_key_header: Option<String>,
+    pub headers: BTreeMap<String, String>,
     pub image_workflow: Option<String>,
     pub model3d_workflow: Option<String>,
     pub workflows_dir: PathBuf,
@@ -417,6 +422,14 @@ impl Settings {
             },
             comfyui: ComfyUiSettings {
                 url: comfy.url.map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| !u.is_empty()),
+                api_key: comfy
+                    .api_key_env
+                    .as_ref()
+                    .and_then(|v| std::env::var(v).ok())
+                    .or(comfy.api_key)
+                    .filter(|k| !k.trim().is_empty()),
+                api_key_header: comfy.api_key_header.map(|h| h.trim().to_string()).filter(|h| !h.is_empty()),
+                headers: comfy.headers,
                 image_workflow: comfy.image_workflow.filter(|w| !w.is_empty()),
                 model3d_workflow: comfy.model3d_workflow.filter(|w| !w.is_empty()),
                 workflows_dir: comfy

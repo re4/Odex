@@ -1,13 +1,15 @@
 //! A mock ComfyUI server: `/system_stats`, `/prompt`, `/history/{id}`,
 //! `/view`, `/upload/image`, `/queue` and `/interrupt`. Every run finishes
-//! after one pending poll with the configured outputs.
+//! after one pending poll with the configured outputs. [`MockComfy::require_header`]
+//! puts it behind an API-key check like an authenticating proxy.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -30,6 +32,8 @@ struct Inner {
     reject: Option<Value>,
     /// Pending polls before a run finishes (u32::MAX = never).
     pending_polls: u32,
+    /// `(header, value)` every request must carry, else HTTP 401.
+    auth: Option<(String, String)>,
 }
 
 #[derive(Clone, Default)]
@@ -80,6 +84,11 @@ impl MockComfy {
         self.state.inner.lock().unwrap().reject = Some(body);
     }
 
+    /// Answer HTTP 401 (an nginx-style HTML page) unless requests carry `header: value`.
+    pub fn require_header(&self, header: &str, value: &str) {
+        self.state.inner.lock().unwrap().auth = Some((header.to_ascii_lowercase(), value.into()));
+    }
+
     /// Keep runs pending forever (cancellation tests).
     pub fn never_finish(&self) {
         self.state.inner.lock().unwrap().pending_polls = u32::MAX;
@@ -121,7 +130,19 @@ pub fn router(state: ComfyState) -> Router {
         .route("/upload/image", post(upload))
         .route("/queue", get(|| async { Json(json!({"queue_running": [], "queue_pending": []})) }).post(queue))
         .route("/interrupt", post(|| async { StatusCode::OK }))
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
+}
+
+async fn guard(State(st): State<ComfyState>, req: Request, next: Next) -> Response {
+    let auth = st.inner.lock().unwrap().auth.clone();
+    if let Some((header, value)) = auth {
+        if req.headers().get(header.as_str()).and_then(|v| v.to_str().ok()) != Some(value.as_str()) {
+            let page = "<html>\r\n<head><title>401 Authorization Required</title></head>\r\n<body>\r\n<center><h1>401 Authorization Required</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n";
+            return (StatusCode::UNAUTHORIZED, [("content-type", "text/html")], page).into_response();
+        }
+    }
+    next.run(req).await
 }
 
 async fn prompt(State(st): State<ComfyState>, Json(body): Json<Value>) -> Response {

@@ -225,6 +225,10 @@ Image and 3D generation through a [ComfyUI](https://github.com/comfyanonymous/Co
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `url` | string | none | Server URL, for example `http://127.0.0.1:8188`. Generation is off without it. |
+| `api_key` | string | none | Plain API key for a server behind an authenticating proxy (nginx, Caddy, Cloudflare). Prefer the desktop's encrypted store (Settings → Models & Endpoints → ComfyUI → API key), which takes precedence, or `api_key_env`. |
+| `api_key_env` | string | none | Environment variable holding the API key. |
+| `api_key_header` | string | none | Header that carries the key. Unset: `Authorization: Bearer <key>` (a key that already starts with `Bearer `, `Basic ` or `Token ` is sent as it is). Set, for example to `X-API-Key`: the key as-is in that header. |
+| `headers` | table | `{}` | Extra headers sent with every request, for example Cloudflare Access service-token headers. |
 | `image_workflow` | string | none | Workflow (file name without `.json`) behind `generate_image`. Settings → Models & Endpoints → Roles → Image generation. |
 | `model3d_workflow` | string | none | Workflow behind `generate_3d`. |
 | `workflows_dir` | path | `~/.odex/comfyui` | Folder of workflow files. "Import workflow" in Settings copies a file here after checking it. |
@@ -247,6 +251,15 @@ The tools' parameters follow the placeholders the workflow uses. `[models.<key>]
 url = "http://127.0.0.1:8188"
 image_workflow = "flux-dev"
 model3d_workflow = "hunyuan3d-2"
+```
+
+A server behind a proxy that checks an API key answers `HTTP 401`; Settings shows "the server needs an API key" (none sent) or "the server rejected the API key" (wrong key or header). Every request carries the key: `/system_stats`, `/prompt`, `/history`, `/view`, `/upload/image`, `/queue` and `/interrupt`.
+
+```toml
+[comfyui]
+url = "https://comfy.example.com"
+api_key_env = "COMFYUI_API_KEY"
+api_key_header = "X-API-Key"   # omit for Authorization: Bearer
 ```
 
 ## `[context]`

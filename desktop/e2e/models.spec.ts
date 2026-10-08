@@ -114,3 +114,44 @@ test('ComfyUI: connect, pick a workflow, generate an image', async () => {
   expect(fs.readFileSync(path.join(L.project, 'generated', 'a-lighthouse-at-dusk.png')).subarray(0, 4).toString('latin1')).toBe('\x89PNG')
   await page.screenshot({ path: path.join(SHOTS, 'generated.png') })
 })
+
+test('ComfyUI behind an auth proxy: the API key is stored encrypted and sent', async () => {
+  const m = await startMock([{ when: {}, reply: { kind: 'text', text: 'OK' } }], { comfy: true, comfyApiKey: 's3cret-key' })
+  const l = await launch({ mockUrl: m.url })
+  try {
+    const { page } = l
+    await engineReady(page)
+    await openPanel(page, 'Models & Endpoints')
+    await page.getByLabel('Server URL').fill(m.comfyUrl!)
+    await page.getByLabel('Server URL').press('Enter')
+    await expect(page.getByText('HTTP 401 Unauthorized: the server needs an API key')).toBeVisible()
+
+    const key = page.getByLabel('API key', { exact: true })
+    await key.fill('s3cret-key')
+    await key.press('Enter')
+    await expect(page.getByText('Connected · ComfyUI 0.3.60-mock')).toBeVisible()
+    await expect(key).toHaveAttribute('placeholder', /saved/)
+    await page.getByRole('heading', { name: 'ComfyUI' }).scrollIntoViewIfNeeded()
+    await page.screenshot({ path: path.join(SHOTS, 'comfyui-api-key.png') })
+    // encrypted in secrets.json, never in config.toml
+    expect(fs.readFileSync(path.join(l.home, 'config.toml'), 'utf8')).not.toContain('s3cret-key')
+    const secrets = fs.readFileSync(path.join(l.home, 'secrets.json'), 'utf8')
+    expect(secrets).toContain('comfyui:api_key')
+    expect(secrets).not.toContain('s3cret-key')
+
+    // another header: the mock wants Bearer, so the key is rejected there
+    await page.getByLabel('Key header').fill('X-API-Key')
+    await page.getByLabel('Key header').press('Enter')
+    await expect(page.getByText('HTTP 401 Unauthorized: the server rejected the API key')).toBeVisible()
+    await expect.poll(() => fs.readFileSync(path.join(l.home, 'config.toml'), 'utf8')).toContain('api_key_header = "X-API-Key"')
+    await page.getByLabel('Key header').fill('')
+    await page.getByLabel('Key header').press('Enter')
+    await expect(page.getByText('Connected · ComfyUI 0.3.60-mock')).toBeVisible()
+
+    await page.getByRole('button', { name: 'Remove ComfyUI API key' }).click()
+    await expect(page.getByText('HTTP 401 Unauthorized: the server needs an API key')).toBeVisible()
+  } finally {
+    await l.close()
+    m.stop()
+  }
+})

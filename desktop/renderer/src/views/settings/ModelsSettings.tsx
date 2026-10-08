@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, CircleAlert, CircleMinus, Copy, FolderOpen, Plus, RefreshCw, RotateCcw, Stethoscope, Trash2, TriangleAlert, Upload } from 'lucide-react'
+import { CheckCircle2, CircleAlert, CircleMinus, Copy, FolderOpen, KeyRound, Plus, RefreshCw, RotateCcw, Stethoscope, Trash2, TriangleAlert, Upload } from 'lucide-react'
 import type { CheckStatus, ComfyStatusResponse, DoctorReport, ModelInfo, ModelRole, PresetInfo, ProviderInfo } from '@shared/index'
 import { useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
@@ -19,6 +19,99 @@ const GENERATION: Array<{ key: 'image_workflow' | 'model3d_workflow'; field: 'im
   { key: 'image_workflow', field: 'imageWorkflow', label: 'Image generation', hint: 'ComfyUI workflow for the generate_image tool' },
   { key: 'model3d_workflow', field: 'model3dWorkflow', label: '3D generation', hint: 'ComfyUI workflow for the generate_3d tool' },
 ]
+
+const COMFY_KEY = 'comfyui:api_key'
+
+/** API key for a ComfyUI server behind an authenticating proxy: OS-encrypted secret, plus the header it goes in. */
+function ComfyAuth({ status, onChange }: { status: ComfyStatusResponse | null; onChange: (s: ComfyStatusResponse) => void }) {
+  const [key, setKey] = useState('')
+  const [stored, setStored] = useState(false)
+  const [header, setHeader] = useState(status?.apiKeyHeader ?? '')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => setHeader(status?.apiKeyHeader ?? ''), [status?.apiKeyHeader])
+  useEffect(() => {
+    void window.odex.secrets.has(COMFY_KEY).then(setStored)
+  }, [])
+
+  const run = async (what: () => Promise<unknown>, done?: string) => {
+    setBusy(true)
+    try {
+      await what()
+      if (done) toast(done, 'success')
+      // re-test the connection with the new credentials
+      onChange(await call('comfyui/status', {}))
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    } finally {
+      setStored(await window.odex.secrets.has(COMFY_KEY))
+      setBusy(false)
+    }
+  }
+  const saveKey = (v: string | null) =>
+    run(async () => {
+      await window.odex.secrets.set(COMFY_KEY, v)
+      setKey('')
+    }, v ? 'ComfyUI API key saved' : 'ComfyUI API key removed')
+  const saveHeader = () => {
+    const h = header.trim()
+    if (h === (status?.apiKeyHeader ?? '')) return
+    void run(() => call('config/write', { edits: [{ keyPath: 'comfyui.api_key_header', value: h || null }] }))
+  }
+
+  return (
+    <>
+      <form
+        className="row"
+        style={{ marginTop: 8 }}
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (key.trim()) void saveKey(key.trim())
+        }}
+      >
+        <label htmlFor="comfy-key" style={{ width: 200, flex: 'none' }}>
+          API key
+        </label>
+        <input
+          id="comfy-key"
+          className="input mono"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          style={{ maxWidth: 380 }}
+          value={key}
+          placeholder={stored ? '•••••••• (saved)' : status?.hasApiKey ? '•••••••• (from config.toml)' : 'optional: for servers behind an auth proxy'}
+          onChange={(e) => setKey(e.target.value)}
+        />
+        <button type="submit" className="btn btn-sm" disabled={busy || !key.trim()}>
+          <KeyRound size={12} /> Save
+        </button>
+        {stored && (
+          <button type="button" className="btn btn-sm btn-ghost" disabled={busy} aria-label="Remove ComfyUI API key" onClick={() => void saveKey(null)}>
+            <Trash2 size={12} /> Remove
+          </button>
+        )}
+      </form>
+      <div className="row" style={{ marginTop: 8 }}>
+        <label htmlFor="comfy-key-header" style={{ width: 200, flex: 'none' }}>
+          Key header
+        </label>
+        <input
+          id="comfy-key-header"
+          className="input mono"
+          style={{ maxWidth: 380 }}
+          value={header}
+          placeholder="Authorization: Bearer <key>"
+          onChange={(e) => setHeader(e.target.value)}
+          onBlur={saveHeader}
+          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+        />
+      </div>
+      <div className="xs subtle" style={{ marginTop: 4, paddingLeft: 208 }}>
+        Sent with every request as <code>Authorization: Bearer &lt;key&gt;</code>. Name a header (e.g. <code>X-API-Key</code>) to send the key there as-is instead. The key is encrypted by the operating system, never written to config.toml.
+      </div>
+    </>
+  )
+}
 
 function ComfySection({ status, onChange }: { status: ComfyStatusResponse | null; onChange: (s: ComfyStatusResponse) => void }) {
   const [url, setUrl] = useState(status?.url ?? '')
@@ -90,8 +183,9 @@ function ComfySection({ status, onChange }: { status: ComfyStatusResponse | null
           {busy ? 'Checking…' : dirty ? 'Save' : 'Test'}
         </button>
       </div>
+      <ComfyAuth status={status} onChange={onChange} />
       {status?.url && !dirty && (
-        <div className="row xs" style={{ marginTop: 4, paddingLeft: 208 }}>
+        <div className="row xs" style={{ marginTop: 6, paddingLeft: 208 }}>
           <span className={`dot ${status.reachable ? 'success' : 'danger'}`} aria-hidden />
           <span className={`selectable ${status.reachable ? 'subtle' : ''}`} style={status.reachable ? undefined : { color: 'var(--danger)' }}>
             {status.reachable ? `Connected · ComfyUI ${status.version ?? ''}` : status.error}

@@ -1,5 +1,6 @@
 //! The ComfyUI client against the mock server.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use odex_comfyui::{ComfyClient, Inputs, Workflow};
@@ -71,4 +72,44 @@ async fn times_out_and_cancels() {
     assert!(e.contains("did not finish"), "{e}");
     c.cancel(&id).await;
     assert_eq!(m.deleted(), vec![id]);
+}
+
+#[tokio::test]
+async fn sends_the_api_key() {
+    let m = MockComfy::start().await;
+    m.require_header("authorization", "Bearer s3cret");
+    let none = BTreeMap::new();
+    let e = ComfyClient::new(&m.url).system_stats().await.unwrap_err().to_string();
+    assert_eq!(e, "HTTP 401 Unauthorized: the server needs an API key");
+    let wrong = ComfyClient::with_auth(&m.url, Some("nope"), None, &none).unwrap();
+    assert_eq!(
+        wrong.system_stats().await.unwrap_err().to_string(),
+        "HTTP 401 Unauthorized: the server rejected the API key"
+    );
+    let graph = workflow().fill(&Inputs { prompt: Some("x".into()), ..Default::default() }).unwrap();
+    assert_eq!(
+        wrong.queue(&graph).await.unwrap_err().to_string(),
+        "HTTP 401 Unauthorized: the server rejected the API key"
+    );
+
+    // every call carries it: stats, upload, queue, history, view
+    let c = ComfyClient::with_auth(&m.url, Some(" s3cret "), None, &none).unwrap();
+    c.system_stats().await.unwrap();
+    c.upload_image("in.png", vec![1]).await.unwrap();
+    let id = c.queue(&graph).await.unwrap();
+    let files = c.wait(&id, Duration::from_secs(10)).await.unwrap();
+    assert!(c.download(&files[0]).await.unwrap().starts_with(b"\x89PNG"));
+    // a pasted "Bearer ..." isn't doubled
+    ComfyClient::with_auth(&m.url, Some("Bearer s3cret"), None, &none).unwrap().system_stats().await.unwrap();
+
+    // the key as-is in a named header
+    m.require_header("x-api-key", "s3cret");
+    ComfyClient::with_auth(&m.url, Some("s3cret"), Some("X-API-Key"), &none).unwrap().system_stats().await.unwrap();
+    // extra headers (e.g. Cloudflare Access service tokens)
+    m.require_header("cf-access-client-id", "abc");
+    let extra = BTreeMap::from([("CF-Access-Client-Id".to_string(), "abc".to_string())]);
+    ComfyClient::with_auth(&m.url, None, None, &extra).unwrap().system_stats().await.unwrap();
+
+    assert!(ComfyClient::with_auth(&m.url, Some("k"), Some("bad header"), &none).is_err());
+    assert!(ComfyClient::with_auth(&m.url, Some("line\nbreak"), None, &none).is_err());
 }

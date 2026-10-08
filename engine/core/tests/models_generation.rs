@@ -145,3 +145,46 @@ async fn generation_errors_reach_the_model() {
     assert!(result.contains("ComfyUI: KSampler failed: CUDA out of memory"), "{result}");
     assert!(!h.work.path().join("generated").exists());
 }
+
+#[tokio::test]
+async fn comfy_api_key_from_the_secret_store_or_config() {
+    let comfy = MockComfy::start().await;
+    comfy.require_header("authorization", "Bearer s3cret");
+    let h = comfy_harness(&comfy).await;
+    let s = api::comfy_status(&h.engine).await;
+    assert!(!s.reachable && !s.has_api_key);
+    assert_eq!(s.error.as_deref(), Some("HTTP 401 Unauthorized: the server needs an API key"));
+
+    // the key the desktop stored encrypted and pushed with secrets/set
+    api::secrets_set(
+        &h.engine,
+        SecretsStoreParams { key: api::COMFY_API_KEY_SECRET.into(), value: Some("s3cret".into()) },
+    );
+    let s = api::comfy_status(&h.engine).await;
+    assert!(s.reachable && s.has_api_key, "{:?}", s.error);
+
+    // generation sends it too
+    let id = h.thread(PermissionMode::Auto).await;
+    h.server.push(MockReply::tool("generate_image", json!({"prompt": "a key"})));
+    h.server.push(MockReply::text("Done."));
+    h.run(&id, "draw a key").await;
+    assert!(h.work.path().join("generated/a-key.png").exists());
+
+    // without the secret: `api_key` from config.toml, in a custom header
+    api::secrets_set(&h.engine, SecretsStoreParams { key: api::COMFY_API_KEY_SECRET.into(), value: None });
+    comfy.require_header("x-api-key", "from-config");
+    api::config_write(
+        &h.engine,
+        ConfigWriteParams {
+            edits: vec![
+                ConfigEdit { key_path: "comfyui.api_key".into(), value: json!("from-config") },
+                ConfigEdit { key_path: "comfyui.api_key_header".into(), value: json!("X-API-Key") },
+            ],
+            project_path: None,
+        },
+    )
+    .unwrap();
+    let s = api::comfy_status(&h.engine).await;
+    assert!(s.reachable && s.has_api_key, "{:?}", s.error);
+    assert_eq!(s.api_key_header.as_deref(), Some("X-API-Key"));
+}

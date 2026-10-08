@@ -405,6 +405,10 @@ pub struct ComfyWorkflowInfo {
 #[serde(rename_all = "camelCase")]
 pub struct ComfyStatusResponse {
     pub url: Option<String>,
+    /// An API key is set (the desktop's secret store, `api_key_env` or `api_key`).
+    pub has_api_key: bool,
+    /// `comfyui.api_key_header`; unset means `Authorization: Bearer`.
+    pub api_key_header: Option<String>,
     /// The server answered `/system_stats`.
     pub reachable: bool,
     pub version: Option<String>,
