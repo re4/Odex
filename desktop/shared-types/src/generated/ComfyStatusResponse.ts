@@ -3,6 +3,14 @@ import type { ComfyWorkflowInfo } from "./ComfyWorkflowInfo";
 
 export type ComfyStatusResponse = { url?: string | null, 
 /**
+ * An API key is set (the desktop's secret store, `api_key_env` or `api_key`).
+ */
+hasApiKey: boolean, 
+/**
+ * `comfyui.api_key_header`; unset means `Authorization: Bearer`.
+ */
+apiKeyHeader?: string | null, 
+/**
  * The server answered `/system_stats`.
  */
 reachable: boolean, version?: string | null, error?: string | null, workflowsDir: string, workflows: Array<ComfyWorkflowInfo>, imageWorkflow?: string | null, model3dWorkflow?: string | null, };

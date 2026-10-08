@@ -34,13 +34,14 @@ export interface Mock {
 }
 
 /** Start `odex-mock-vllm` on a free port with a rule policy (plus a mock ComfyUI with `comfy`). */
-export async function startMock(rules: MockRule[], opts: { maxModelLen?: number; models?: string[]; comfy?: boolean } = {}): Promise<Mock> {
+export async function startMock(rules: MockRule[], opts: { maxModelLen?: number; models?: string[]; comfy?: boolean; comfyApiKey?: string } = {}): Promise<Mock> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'odex-mock-'))
   const rulesPath = path.join(dir, 'rules.json')
   fs.writeFileSync(rulesPath, JSON.stringify({ rules }))
   const args = ['--port', '0', '--rules', rulesPath, '--max-model-len', String(opts.maxModelLen ?? 32768), '--delay-ms', '1']
   for (const m of opts.models ?? ['mock-coder']) args.push('--model', m)
   if (opts.comfy) args.push('--comfy-port', '0')
+  if (opts.comfyApiKey) args.push('--comfy-api-key', opts.comfyApiKey)
   const proc = spawn(binary('odex-mock-vllm'), args, { stdio: ['ignore', 'pipe', 'pipe'] })
   const [url, comfyUrl] = await new Promise<[string, string | undefined]>((resolve, reject) => {
     let buf = ''

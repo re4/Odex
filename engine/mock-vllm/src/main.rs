@@ -28,6 +28,9 @@ struct Args {
     /// Also serve a mock ComfyUI on this port (0 = any free port).
     #[arg(long)]
     comfy_port: Option<u16>,
+    /// Make the mock ComfyUI require `Authorization: Bearer <key>`.
+    #[arg(long)]
+    comfy_api_key: Option<String>,
 }
 
 #[tokio::main]
@@ -51,6 +54,9 @@ async fn main() -> anyhow::Result<()> {
     let _comfy = match a.comfy_port {
         Some(port) => {
             let c = odex_mock_vllm::comfy::MockComfy::start_on(&format!("{}:{port}", a.host)).await;
+            if let Some(k) = &a.comfy_api_key {
+                c.require_header("authorization", &format!("Bearer {k}"));
+            }
             println!("mock comfyui listening on {}", c.url);
             Some(c)
         }

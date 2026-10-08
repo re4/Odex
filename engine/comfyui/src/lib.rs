@@ -4,13 +4,19 @@
 //! [`workflow`]). A run queues the filled graph on `/prompt`, polls
 //! `/history/<id>` until it finishes, then downloads the files its output
 //! nodes saved (`SaveImage`, `SaveGLB`, ...) through `/view`.
+//!
+//! Servers behind an authenticating proxy get an API key on every request
+//! ([`ComfyClient::with_auth`]).
 
 pub mod workflow;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context as _};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
+use reqwest::StatusCode;
 use serde_json::{json, Value};
 
 pub use workflow::{import_workflow, list_workflows, Inputs, Workflow, PLACEHOLDERS};
@@ -43,14 +49,59 @@ pub struct ComfyClient {
     base: String,
     http: reqwest::Client,
     client_id: String,
+    /// An API key goes out with every request.
+    has_key: bool,
 }
 
 impl ComfyClient {
     pub fn new(url: &str) -> Self {
+        Self::build(url, HeaderMap::new(), false)
+    }
+
+    /// A client that sends `api_key` with every request: as `Authorization: Bearer <key>`, or as-is in
+    /// `header` when one is named (e.g. `X-API-Key`). `headers` are added to every request too.
+    pub fn with_auth(
+        url: &str,
+        api_key: Option<&str>,
+        header: Option<&str>,
+        headers: &BTreeMap<String, String>,
+    ) -> anyhow::Result<Self> {
+        let mut map = HeaderMap::new();
+        for (k, v) in headers {
+            let name =
+                HeaderName::from_bytes(k.trim().as_bytes()).with_context(|| format!("invalid header name `{k}`"))?;
+            let value = HeaderValue::from_str(v.trim()).with_context(|| format!("invalid value for header `{k}`"))?;
+            map.insert(name, value);
+        }
+        let key = api_key.map(str::trim).filter(|k| !k.is_empty());
+        if let Some(key) = key {
+            let (name, value) = match header.map(str::trim).filter(|h| !h.is_empty()) {
+                Some(h) => (
+                    HeaderName::from_bytes(h.as_bytes()).with_context(|| format!("invalid API key header `{h}`"))?,
+                    key.to_string(),
+                ),
+                // a pasted "Bearer …" / "Basic …" value is sent as it is
+                None if has_scheme(key) => (AUTHORIZATION, key.to_string()),
+                None => (AUTHORIZATION, format!("Bearer {key}")),
+            };
+            let mut value =
+                HeaderValue::from_str(&value).context("the API key has characters that can't go in an HTTP header")?;
+            value.set_sensitive(true);
+            map.insert(name, value);
+        }
+        Ok(Self::build(url, map, key.is_some()))
+    }
+
+    fn build(url: &str, headers: HeaderMap, has_key: bool) -> Self {
         Self {
             base: url.trim().trim_end_matches('/').to_string(),
-            http: reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build().unwrap_or_default(),
+            http: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .default_headers(headers)
+                .build()
+                .unwrap_or_default(),
             client_id: uuid::Uuid::new_v4().to_string(),
+            has_key,
         }
     }
 
@@ -67,7 +118,7 @@ impl ComfyClient {
             .send()
             .await
             .with_context(|| format!("cannot reach ComfyUI at {}", self.base))?;
-        json_of(r).await
+        self.json_of(r).await
     }
 
     pub fn version(stats: &Value) -> Option<String> {
@@ -96,7 +147,7 @@ impl ComfyClient {
             .send()
             .await
             .context("uploading the input image to ComfyUI")?;
-        let v = json_of(r).await?;
+        let v = self.json_of(r).await?;
         let name = v["name"].as_str().ok_or_else(|| anyhow!("ComfyUI did not return the uploaded image's name"))?;
         Ok(match v["subfolder"].as_str().filter(|s| !s.is_empty()) {
             Some(sub) => format!("{sub}/{name}"),
@@ -115,6 +166,9 @@ impl ComfyClient {
             .await
             .with_context(|| format!("cannot reach ComfyUI at {}", self.base))?;
         let status = r.status();
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            bail!("{}", self.http_error(status, ""));
+        }
         let v: Value = r.json().await.unwrap_or(Value::Null);
         if !status.is_success() || v["node_errors"].as_object().is_some_and(|e| !e.is_empty()) {
             bail!("ComfyUI rejected the workflow: {}", describe_rejection(&v, status));
@@ -148,7 +202,7 @@ impl ComfyClient {
     async fn history(&self, prompt_id: &str) -> anyhow::Result<Option<Value>> {
         let r =
             self.http.get(self.url(&format!("history/{prompt_id}"))).timeout(Duration::from_secs(30)).send().await?;
-        let mut v = json_of(r).await?;
+        let mut v = self.json_of(r).await?;
         Ok(v.get_mut(prompt_id).map(Value::take))
     }
 
@@ -162,9 +216,35 @@ impl ComfyClient {
             .await
             .with_context(|| format!("downloading {}", f.filename))?;
         if !r.status().is_success() {
-            bail!("downloading {} failed: HTTP {}", f.filename, r.status());
+            bail!("downloading {} failed: {}", f.filename, self.http_error(r.status(), ""));
         }
         Ok(r.bytes().await?.to_vec())
+    }
+
+    async fn json_of(&self, r: reqwest::Response) -> anyhow::Result<Value> {
+        let status = r.status();
+        let text = r.text().await?;
+        if !status.is_success() {
+            bail!("{}", self.http_error(status, &text));
+        }
+        serde_json::from_str(&text).context("ComfyUI returned invalid JSON")
+    }
+
+    /// A failed response, readably: auth failures say what to fix, HTML error pages shrink to their title.
+    fn http_error(&self, status: StatusCode, body: &str) -> String {
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return if self.has_key {
+                format!("HTTP {status}: the server rejected the API key")
+            } else {
+                format!("HTTP {status}: the server needs an API key")
+            };
+        }
+        let body = body.trim();
+        let detail = if body.starts_with('<') { html_title(body) } else { Some(body.chars().take(300).collect()) };
+        match detail.filter(|d| !d.is_empty()) {
+            Some(d) => format!("HTTP {status}: {d}"),
+            None => format!("HTTP {status}"),
+        }
     }
 
     /// Drop a run: take it off the queue, or interrupt it if it is running.
@@ -183,17 +263,22 @@ impl ComfyClient {
     }
 }
 
-async fn json_of(r: reqwest::Response) -> anyhow::Result<Value> {
-    let status = r.status();
-    let text = r.text().await?;
-    if !status.is_success() {
-        bail!("HTTP {status}: {}", text.chars().take(300).collect::<String>());
-    }
-    serde_json::from_str(&text).context("ComfyUI returned invalid JSON")
+/// `<title>` of an HTML error page (proxies answer with those).
+fn html_title(body: &str) -> Option<String> {
+    let lower = body.to_ascii_lowercase();
+    let start = lower.find("<title>")? + "<title>".len();
+    let end = start + lower[start..].find("</title>")?;
+    Some(body[start..end].trim().to_string()).filter(|t| !t.is_empty())
+}
+
+/// An `Authorization` value that already names its scheme.
+fn has_scheme(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    ["bearer ", "basic ", "token "].iter().any(|s| lower.starts_with(s))
 }
 
 /// A `/prompt` rejection: `{"error": {message, details}, "node_errors": {id: {class_type, errors}}}`.
-fn describe_rejection(v: &Value, status: reqwest::StatusCode) -> String {
+fn describe_rejection(v: &Value, status: StatusCode) -> String {
     let mut parts = Vec::new();
     let e = &v["error"];
     if let Some(m) = e["message"].as_str().or(e.as_str()) {
@@ -298,6 +383,16 @@ mod tests {
     }
 
     #[test]
+    fn readable_http_errors() {
+        let c = ComfyClient::new("http://x");
+        let page = "<html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>nginx</body></html>";
+        assert_eq!(c.http_error(StatusCode::BAD_GATEWAY, page), "HTTP 502 Bad Gateway: 502 Bad Gateway");
+        assert_eq!(c.http_error(StatusCode::NOT_FOUND, "no such route"), "HTTP 404 Not Found: no such route");
+        assert_eq!(c.http_error(StatusCode::FORBIDDEN, page), "HTTP 403 Forbidden: the server needs an API key");
+        assert!(has_scheme("Basic dXNlcjpwYXNz") && has_scheme("bearer x") && !has_scheme("sk-123"));
+    }
+
+    #[test]
     fn describes_rejections() {
         let v = json!({
             "error": {"type": "prompt_outputs_failed_validation", "message": "Prompt outputs failed validation", "details": ""},
@@ -306,7 +401,7 @@ mod tests {
             ]}}
         });
         assert_eq!(
-            describe_rejection(&v, reqwest::StatusCode::BAD_REQUEST),
+            describe_rejection(&v, StatusCode::BAD_REQUEST),
             "Prompt outputs failed validation; node 4 (CheckpointLoaderSimple): Value not in list (ckpt_name: 'x.safetensors' not in [])"
         );
     }

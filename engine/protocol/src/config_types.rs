@@ -420,6 +420,20 @@ pub struct ComfyUiToml {
     /// Server URL, e.g. `http://127.0.0.1:8188`. Generation is off when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Plain API key for a server behind an authenticating proxy. Prefer
+    /// `api_key_env` or the desktop's encrypted store.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Environment variable holding the API key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    /// Header that carries the key. Unset: `Authorization: Bearer <key>`;
+    /// set (e.g. `X-API-Key`): the key as-is in that header.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key_header: Option<String>,
+    /// Extra headers sent with every request.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
     /// Workflow (file name without `.json`) used by `generate_image`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_workflow: Option<String>,

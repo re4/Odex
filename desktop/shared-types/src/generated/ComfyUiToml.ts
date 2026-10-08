@@ -11,6 +11,24 @@ export type ComfyUiToml = {
  */
 url?: string | null, 
 /**
+ * Plain API key for a server behind an authenticating proxy. Prefer
+ * `api_key_env` or the desktop's encrypted store.
+ */
+api_key?: string | null, 
+/**
+ * Environment variable holding the API key.
+ */
+api_key_env?: string | null, 
+/**
+ * Header that carries the key. Unset: `Authorization: Bearer <key>`;
+ * set (e.g. `X-API-Key`): the key as-is in that header.
+ */
+api_key_header?: string | null, 
+/**
+ * Extra headers sent with every request.
+ */
+headers: { [key in string]?: string }, 
+/**
  * Workflow (file name without `.json`) used by `generate_image`.
  */
 image_workflow?: string | null, 

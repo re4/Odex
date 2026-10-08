@@ -899,12 +899,33 @@ pub fn preset_list(engine: &Engine) -> PresetListResponse {
 
 // ==================================================================== comfyui
 
+/// Secret-store key of the ComfyUI API key (set by the desktop, encrypted at rest).
+pub const COMFY_API_KEY_SECRET: &str = "comfyui:api_key";
+
+/// The ComfyUI API key: the desktop's secret first, then `api_key_env` / `api_key`.
+fn comfy_api_key(engine: &Engine, c: &odex_config::ComfyUiSettings) -> Option<String> {
+    engine.secrets.read().unwrap().get(COMFY_API_KEY_SECRET).cloned().or_else(|| c.api_key.clone())
+}
+
+/// A client for the configured ComfyUI server, with its API key and headers.
+pub(crate) fn comfy_client(
+    engine: &Engine,
+    c: &odex_config::ComfyUiSettings,
+    url: &str,
+) -> anyhow::Result<odex_comfyui::ComfyClient> {
+    let key = comfy_api_key(engine, c);
+    odex_comfyui::ComfyClient::with_auth(url, key.as_deref(), c.api_key_header.as_deref(), &c.headers)
+}
+
 /// The ComfyUI server's health plus the workflows on disk.
 pub async fn comfy_status(engine: &Engine) -> ComfyStatusResponse {
     let c = engine.user_settings().comfyui;
     let (reachable, version, error) = match &c.url {
-        Some(url) => match odex_comfyui::ComfyClient::new(url).system_stats().await {
-            Ok(v) => (true, odex_comfyui::ComfyClient::version(&v), None),
+        Some(url) => match comfy_client(engine, &c, url) {
+            Ok(client) => match client.system_stats().await {
+                Ok(v) => (true, odex_comfyui::ComfyClient::version(&v), None),
+                Err(e) => (false, None, Some(format!("{e:#}"))),
+            },
             Err(e) => (false, None, Some(format!("{e:#}"))),
         },
         None => (false, None, None),
@@ -915,6 +936,8 @@ pub async fn comfy_status(engine: &Engine) -> ComfyStatusResponse {
         error,
         workflows_dir: c.workflows_dir.to_string_lossy().to_string(),
         workflows: odex_comfyui::list_workflows(&c.workflows_dir),
+        has_api_key: comfy_api_key(engine, &c).is_some(),
+        api_key_header: c.api_key_header.clone(),
         url: c.url,
         image_workflow: c.image_workflow,
         model3d_workflow: c.model3d_workflow,

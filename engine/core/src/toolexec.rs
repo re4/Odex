@@ -1228,7 +1228,10 @@ async fn generate(o: &Out<'_>) -> ToolOutcome {
         o.err(msg)
     };
 
-    let client = odex_comfyui::ComfyClient::new(url);
+    let client = match crate::api::comfy_client(o.engine, comfy, url) {
+        Ok(c) => c,
+        Err(e) => return fail(format!("ComfyUI: {e:#}")),
+    };
     let mut inputs = odex_comfyui::Inputs {
         prompt: prompt.clone(),
         negative_prompt: text("negative_prompt"),
