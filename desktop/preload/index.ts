@@ -86,6 +86,8 @@ const api = {
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
     openPath: (p: string) => ipcRenderer.invoke('shell:openPath', p),
     showItem: (p: string) => ipcRenderer.invoke('shell:showItem', p),
+    /** Move a file to the Recycle Bin / Trash. */
+    trashItem: (p: string) => ipcRenderer.invoke('shell:trashItem', p) as Promise<void>,
     openInEditor: (p: string, line?: number) => ipcRenderer.invoke('shell:openInEditor', p, line),
   },
   fs: {

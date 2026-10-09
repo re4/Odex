@@ -301,6 +301,16 @@ export function parseGoalArgs(arg: string): GoalArgs {
   return out
 }
 
+/** Wait (up to `ms`) until the thread has no turn running. */
+async function untilIdle(threadId: string, ms: number): Promise<void> {
+  const busy = () => {
+    const s = useApp.getState().threads[threadId]?.thread.status
+    return s === 'running' || s === 'waitingApproval' || s === 'compacting' || s === 'reconnecting'
+  }
+  const until = Date.now() + ms
+  while (busy() && Date.now() < until) await new Promise((r) => setTimeout(r, 100))
+}
+
 /** Roll the thread back to just before `turnId` (drops it and later turns) without resending. */
 export async function rollbackTo(threadId: string, turnId: string, restoreFiles: boolean): Promise<boolean> {
   try {
@@ -390,7 +400,13 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     args: '[focus]',
     run: async (tid, arg) => {
       if (!tid) return
-      await call('thread/compact', { threadId: tid, focus: arg || undefined })
+      // a reply can show before its turn has ended: compact once it has, like a queued message
+      await untilIdle(tid, 30_000)
+      try {
+        await call('thread/compact', { threadId: tid, focus: arg || undefined })
+      } catch (e) {
+        toast(`Couldn’t compact: ${(e as Error).message}`, 'error')
+      }
     },
   },
   {

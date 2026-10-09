@@ -319,6 +319,8 @@ function registerIpc(): void {
   })
   ipcMain.handle('shell:openPath', (_e, p: string) => shell.openPath(p))
   ipcMain.handle('shell:showItem', (_e, p: string) => shell.showItemInFolder(p))
+  // to the Recycle Bin / Trash, so it can be restored (tests delete their temp files instead)
+  ipcMain.handle('shell:trashItem', (_e, p: string) => (process.env.ODEX_E2E ? fs.promises.rm(p, { force: true }) : shell.trashItem(p)))
   // command templates (`code -g {file}:{line}`, `vim +{line} {file}`), per-argument quoting and
   // per-project overrides (Edit project → General) live in editor.ts
   ipcMain.handle('shell:openInEditor', (_e, p: string, line?: number) => openInEditor(p, line, getSettings(), (m, params) => engine.request(m, params)))

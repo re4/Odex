@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle2, CircleAlert, CircleMinus, Copy, FolderOpen, KeyRound, Plus, RefreshCw, RotateCcw, Stethoscope, Trash2, TriangleAlert, Upload } from 'lucide-react'
-import type { CheckStatus, ComfyStatusResponse, DoctorReport, ModelInfo, ModelRole, PresetInfo, ProviderInfo } from '@shared/index'
+import type { CheckStatus, ComfyStatusResponse, ComfyTemplate, ComfyTemplatesResponse, DoctorReport, ModelInfo, ModelRole, PresetInfo, ProviderInfo } from '@shared/index'
 import { useApp } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import * as A from '@/lib/actions'
@@ -21,76 +21,99 @@ const GENERATION: Array<{ key: 'image_workflow' | 'model3d_workflow'; field: 'im
 ]
 
 const COMFY_KEY = 'comfyui:api_key'
+const COMFY_ORG_KEY = 'comfyui:comfy_org_api_key'
+/** Role dropdown value prefix for a workflow saved in ComfyUI (not imported yet). */
+const SERVER = 'server:'
+/** Role dropdown value prefix for a template from ComfyUI's library. */
+const TEMPLATE = 'template:'
 
-/** API key for a ComfyUI server behind an authenticating proxy: OS-encrypted secret, plus the header it goes in. */
-function ComfyAuth({ status, onChange }: { status: ComfyStatusResponse | null; onChange: (s: ComfyStatusResponse) => void }) {
-  const [key, setKey] = useState('')
+/** The template scan per server (it reads every candidate template and the node definitions): 10 minutes. */
+let templateCache: { url: string; at: number; data: ComfyTemplatesResponse } | null = null
+/** `3d/Image to mesh.json` → `3d/Image to mesh` */
+const workflowName = (path: string) => path.replace(/\.json$/i, '')
+
+/** A ComfyUI secret in the OS-encrypted store (never in config.toml); saving it re-tests the connection. */
+function ComfySecret(props: { secret: string; id: string; label: string; name: string; hint: string; fromConfig: boolean; onChange: (s: ComfyStatusResponse) => void }) {
+  const { secret, name } = props
+  const [value, setValue] = useState('')
   const [stored, setStored] = useState(false)
-  const [header, setHeader] = useState(status?.apiKeyHeader ?? '')
   const [busy, setBusy] = useState(false)
-  useEffect(() => setHeader(status?.apiKeyHeader ?? ''), [status?.apiKeyHeader])
   useEffect(() => {
-    void window.odex.secrets.has(COMFY_KEY).then(setStored)
-  }, [])
+    void window.odex.secrets.has(secret).then(setStored)
+  }, [secret])
 
-  const run = async (what: () => Promise<unknown>, done?: string) => {
+  const save = async (v: string | null) => {
     setBusy(true)
     try {
-      await what()
-      if (done) toast(done, 'success')
-      // re-test the connection with the new credentials
-      onChange(await call('comfyui/status', {}))
+      await window.odex.secrets.set(secret, v)
+      setValue('')
+      toast(v ? `${name} saved` : `${name} removed`, 'success')
+      props.onChange(await call('comfyui/status', {}))
     } catch (e) {
       toast((e as Error).message, 'error')
     } finally {
-      setStored(await window.odex.secrets.has(COMFY_KEY))
+      setStored(await window.odex.secrets.has(secret))
       setBusy(false)
     }
   }
-  const saveKey = (v: string | null) =>
-    run(async () => {
-      await window.odex.secrets.set(COMFY_KEY, v)
-      setKey('')
-    }, v ? 'ComfyUI API key saved' : 'ComfyUI API key removed')
-  const saveHeader = () => {
+
+  return (
+    <form
+      className="row"
+      style={{ marginTop: 8 }}
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (value.trim()) void save(value.trim())
+      }}
+    >
+      <label htmlFor={props.id} style={{ width: 200, flex: 'none' }}>
+        {props.label}
+      </label>
+      <input
+        id={props.id}
+        className="input mono"
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        style={{ maxWidth: 380 }}
+        value={value}
+        placeholder={stored ? '•••••••• (saved)' : props.fromConfig ? '•••••••• (from config.toml)' : props.hint}
+        onChange={(e) => setValue(e.target.value)}
+      />
+      <button type="submit" className="btn btn-sm" disabled={busy || !value.trim()}>
+        <KeyRound size={12} /> Save
+      </button>
+      {stored && (
+        <button type="button" className="btn btn-sm btn-ghost" disabled={busy} aria-label={`Remove ${name}`} onClick={() => void save(null)}>
+          <Trash2 size={12} /> Remove
+        </button>
+      )}
+    </form>
+  )
+}
+
+/**
+ * Credentials: an API key for a server behind an authenticating proxy (and the header it goes in), and a
+ * Comfy.org key for partner nodes such as Ideogram.
+ */
+function ComfyAuth({ status, onChange }: { status: ComfyStatusResponse | null; onChange: (s: ComfyStatusResponse) => void }) {
+  const [header, setHeader] = useState(status?.apiKeyHeader ?? '')
+  useEffect(() => setHeader(status?.apiKeyHeader ?? ''), [status?.apiKeyHeader])
+  const saveHeader = async () => {
     const h = header.trim()
     if (h === (status?.apiKeyHeader ?? '')) return
-    void run(() => call('config/write', { edits: [{ keyPath: 'comfyui.api_key_header', value: h || null }] }))
+    try {
+      await call('config/write', { edits: [{ keyPath: 'comfyui.api_key_header', value: h || null }] })
+      // re-test the connection with the new header
+      onChange(await call('comfyui/status', {}))
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    }
   }
 
   return (
     <>
-      <form
-        className="row"
-        style={{ marginTop: 8 }}
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (key.trim()) void saveKey(key.trim())
-        }}
-      >
-        <label htmlFor="comfy-key" style={{ width: 200, flex: 'none' }}>
-          API key
-        </label>
-        <input
-          id="comfy-key"
-          className="input mono"
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          style={{ maxWidth: 380 }}
-          value={key}
-          placeholder={stored ? '•••••••• (saved)' : status?.hasApiKey ? '•••••••• (from config.toml)' : 'optional: for servers behind an auth proxy'}
-          onChange={(e) => setKey(e.target.value)}
-        />
-        <button type="submit" className="btn btn-sm" disabled={busy || !key.trim()}>
-          <KeyRound size={12} /> Save
-        </button>
-        {stored && (
-          <button type="button" className="btn btn-sm btn-ghost" disabled={busy} aria-label="Remove ComfyUI API key" onClick={() => void saveKey(null)}>
-            <Trash2 size={12} /> Remove
-          </button>
-        )}
-      </form>
+      <ComfySecret secret={COMFY_KEY} id="comfy-key" label="API key" name="ComfyUI API key" hint="optional: for servers behind an auth proxy" fromConfig={!!status?.hasApiKey} onChange={onChange} />
       <div className="row" style={{ marginTop: 8 }}>
         <label htmlFor="comfy-key-header" style={{ width: 200, flex: 'none' }}>
           Key header
@@ -102,21 +125,68 @@ function ComfyAuth({ status, onChange }: { status: ComfyStatusResponse | null; o
           value={header}
           placeholder="Authorization: Bearer <key>"
           onChange={(e) => setHeader(e.target.value)}
-          onBlur={saveHeader}
+          onBlur={() => void saveHeader()}
           onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
         />
       </div>
       <div className="xs subtle" style={{ marginTop: 4, paddingLeft: 208 }}>
         Sent with every request as <code>Authorization: Bearer &lt;key&gt;</code>. Name a header (e.g. <code>X-API-Key</code>) to send the key there as-is instead. The key is encrypted by the operating system, never written to config.toml.
       </div>
+      <ComfySecret
+        secret={COMFY_ORG_KEY}
+        id="comfy-org-key"
+        label="Comfy.org API key"
+        name="Comfy.org API key"
+        hint="optional: for partner nodes such as Ideogram"
+        fromConfig={!!status?.hasComfyOrgKey}
+        onChange={onChange}
+      />
+      <div className="xs subtle" style={{ marginTop: 4, paddingLeft: 208 }}>
+        Partner (API) nodes such as Ideogram run on Comfy.org and need this key when Odex queues the workflow (ComfyUI&apos;s page uses your sign-in instead). Create one at{' '}
+        <a
+          href="https://platform.comfy.org/login"
+          onClick={(e) => {
+            e.preventDefault()
+            void window.odex.shell.openExternal('https://platform.comfy.org/login')
+          }}
+        >
+          platform.comfy.org
+        </a>
+        . It is sent with each run and encrypted by the operating system.
+      </div>
     </>
   )
 }
 
-function ComfySection({ status, onChange }: { status: ComfyStatusResponse | null; onChange: (s: ComfyStatusResponse) => void }) {
+function ComfySection({
+  status,
+  onChange,
+  templates,
+  reloadTemplates,
+}: {
+  status: ComfyStatusResponse | null
+  onChange: (s: ComfyStatusResponse) => void
+  templates: ComfyTemplatesResponse | 'loading' | null
+  reloadTemplates: () => void
+}) {
   const [url, setUrl] = useState(status?.url ?? '')
   const [busy, setBusy] = useState(false)
   useEffect(() => setUrl(status?.url ?? ''), [status?.url])
+
+  /** An imported workflow: to the Recycle Bin / Trash, and roles that used it go back to Off. */
+  const removeWorkflow = async (name: string, path: string) => {
+    const roles = GENERATION.filter((g) => status?.[g.field] === name)
+    const bin = window.odex.platform === 'win32' ? 'Recycle Bin' : 'Trash'
+    const note = roles.length ? ` ${roles.map((g) => g.label).join(' and ')} ${roles.length === 1 ? 'goes' : 'go'} back to Off.` : ''
+    if (!(await A.confirmDialog('Remove workflow', `Move ${name} to the ${bin}?${note}`, 'Remove', true))) return
+    try {
+      await window.odex.shell.trashItem(path)
+      if (roles.length) await call('config/write', { edits: roles.map((g) => ({ keyPath: `comfyui.${g.key}`, value: null })) })
+      onChange(await call('comfyui/status', {}))
+    } catch (e) {
+      toast(`Could not remove ${name}: ${(e as Error).message}`, 'error')
+    }
+  }
   const dirty = url.trim().replace(/\/+$/, '') !== (status?.url ?? '')
 
   const save = async () => {
@@ -163,8 +233,8 @@ function ComfySection({ status, onChange }: { status: ComfyStatusResponse | null
         </button>
       </div>
       <div className="xs muted" style={{ marginBottom: 8 }}>
-        Image and 3D generation run your ComfyUI workflows. In ComfyUI, type <code>{'{{prompt}}'}</code> into the prompt box (optionally <code>{'{{negative_prompt}}'}</code>, <code>{'{{width}}'}</code>,{' '}
-        <code>{'{{height}}'}</code>, <code>{'{{seed}}'}</code>, or <code>{'{{image}}'}</code> in a Load Image node for image-to-3D), export it with Workflow → Export (API), then import the file here.
+        Image and 3D generation run your ComfyUI workflows. Under Image generation and 3D generation above, pick one of ComfyUI&apos;s templates your server has the models for, a workflow saved in ComfyUI, or one you imported. Odex puts the agent&apos;s prompt into the positive prompt box and its image into the Load Image node. To
+        choose other widgets, type <code>{'{{prompt}}'}</code>, <code>{'{{negative_prompt}}'}</code>, <code>{'{{width}}'}</code>, <code>{'{{height}}'}</code>, <code>{'{{seed}}'}</code> or <code>{'{{image}}'}</code> into them in ComfyUI before saving.
       </div>
       <div className="row">
         <label htmlFor="comfy-url" style={{ width: 200, flex: 'none' }}>
@@ -192,7 +262,61 @@ function ComfySection({ status, onChange }: { status: ComfyStatusResponse | null
           </span>
         </div>
       )}
-      {status && status.workflows.length === 0 && <div className="muted small" style={{ marginTop: 8 }}>No workflows yet.</div>}
+      {status?.reachable && !dirty && (
+        <div className="xs" style={{ marginTop: 4, paddingLeft: 208 }} data-testid="comfy-saved">
+          {status.serverWorkflowsError ? (
+            <span className="selectable" style={{ color: 'var(--warning)' }}>
+              Couldn’t list the workflows saved in ComfyUI: {status.serverWorkflowsError}
+            </span>
+          ) : status.serverWorkflows.length > 0 ? (
+            <span className="subtle">
+              {status.serverWorkflows.length} {status.serverWorkflows.length === 1 ? 'workflow' : 'workflows'} saved in ComfyUI: pick one under Image generation or 3D generation above.
+            </span>
+          ) : (
+            <span className="subtle">
+              Nothing is saved in ComfyUI yet. Open your workflow in ComfyUI and save it (Workflow → Save, or Ctrl+S): open tabs live only in your browser. It shows up here when you come back.
+            </span>
+          )}
+        </div>
+      )}
+      {status?.reachable && !dirty && templates && (
+        <div className="xs" style={{ marginTop: 4, paddingLeft: 208 }} data-testid="comfy-templates">
+          {templates === 'loading' ? (
+            <span className="subtle">Checking what your ComfyUI can run…</span>
+          ) : templates.error ? (
+            <span className="selectable" style={{ color: 'var(--warning)' }}>
+              Couldn’t read ComfyUI&apos;s templates: {templates.error}
+            </span>
+          ) : (
+            <>
+              <span className="subtle">
+                {templates.image.length + templates.model3d.length} ready on your ComfyUI
+                {templates.unavailable.length ? `, ${templates.unavailable.length} templates need models or nodes it doesn’t have` : ''}.{' '}
+              </span>
+              <button className="btn btn-sm btn-ghost" style={{ padding: '0 6px', height: 20 }} onClick={reloadTemplates}>
+                Check again
+              </button>
+              {templates.unavailable.length > 0 && (
+                <details style={{ marginTop: 4 }}>
+                  <summary className="subtle">What the other templates need</summary>
+                  <ul className="selectable" style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                    {templates.unavailable.map((u) => (
+                      <li key={u.title}>
+                        {u.title}: {u.missing.join(', ')}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </>
+          )}
+        </div>
+      )}
+      {status && status.workflows.length === 0 && (
+        <div className="muted small" style={{ marginTop: 8 }}>
+          No workflows imported yet.
+        </div>
+      )}
       {status && status.workflows.length > 0 && (
         <div className="col" style={{ gap: 4, marginTop: 8 }}>
           {status.workflows.map((w) => (
@@ -210,6 +334,9 @@ function ComfySection({ status, onChange }: { status: ComfyStatusResponse | null
                 </span>
               )}
               {usedFor(w.name) && <span className="badge">{usedFor(w.name)}</span>}
+              <button className="icon-btn sm" title="Remove workflow" aria-label={`Remove workflow ${w.name}`} onClick={() => void removeWorkflow(w.name, w.path)}>
+                <Trash2 size={13} />
+              </button>
             </div>
           ))}
         </div>
@@ -355,14 +482,44 @@ export function ModelsSettings() {
   const [presets, setPresets] = useState<PresetInfo[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const [comfy, setComfy] = useState<ComfyStatusResponse | null>(null)
+  const [templates, setTemplates] = useState<ComfyTemplatesResponse | 'loading' | null>(null)
+  const comfyUrl = comfy?.reachable ? comfy.url : null
+  const loadTemplates = (force: boolean) => {
+    if (!comfyUrl) return
+    if (!force && templateCache?.url === comfyUrl && Date.now() - templateCache.at < 10 * 60_000) {
+      setTemplates(templateCache.data)
+      return
+    }
+    setTemplates('loading')
+    void call('comfyui/templates', {})
+      .then((data) => {
+        templateCache = { url: comfyUrl, at: Date.now(), data }
+        setTemplates(data)
+      })
+      .catch((e: Error) => setTemplates({ image: [], model3d: [], unavailable: [], error: e.message }))
+  }
+  useEffect(() => {
+    if (comfyUrl) loadTemplates(false)
+    else setTemplates(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comfyUrl])
 
   useEffect(() => {
     void call('preset/list', {})
       .then((r) => setPresets(r.presets))
       .catch(() => {})
-    void call('comfyui/status', {})
-      .then(setComfy)
-      .catch(() => {})
+    let loadedAt = 0
+    const loadComfy = () => {
+      loadedAt = Date.now()
+      void call('comfyui/status', {})
+        .then(setComfy)
+        .catch(() => {})
+    }
+    loadComfy()
+    // back from ComfyUI (say, after saving a workflow or adding a model): look again, at most every 10 s
+    const onFocus = () => Date.now() - loadedAt > 10_000 && loadComfy()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
   }, [])
 
   const runDoctor = async (providerId: string | null, model: string | null, quick: boolean) => {
@@ -383,9 +540,69 @@ export function ModelsSettings() {
     await useApp.getState().refreshModels()
   }
 
-  const setWorkflow = async (key: (typeof GENERATION)[number]['key'], name: string) => {
-    await call('config/write', { edits: [{ keyPath: `comfyui.${key}`, value: name || null }] })
-    setComfy(await call('comfyui/status', {}))
+  const [converting, setConverting] = useState<string | null>(null)
+  const setWorkflow = async (key: (typeof GENERATION)[number]['key'], value: string) => {
+    const role = key === 'image_workflow' ? 'image' : 'model3d'
+    if (value.startsWith(TEMPLATE)) {
+      const t = templates && templates !== 'loading' ? [...templates.image, ...templates.model3d].find((x) => x.name === value.slice(TEMPLATE.length)) : null
+      if (!t) return
+      setConverting(key)
+      try {
+        setComfy(await call('comfyui/useTemplate', { name: t.name, role }))
+        toast(`${GENERATION.find((g) => g.key === key)!.label} now uses ${t.title}`, 'success')
+      } catch (e) {
+        toast(`${t.title}: ${(e as Error).message}`, 'error')
+      } finally {
+        setConverting(null)
+      }
+      return
+    }
+    // "server:<path>": a workflow saved in ComfyUI, converted and imported first
+    const server = value.startsWith(SERVER) ? value.slice(SERVER.length) : null
+    if (!server) {
+      await call('config/write', { edits: [{ keyPath: `comfyui.${key}`, value: value || null }] })
+      setComfy(await call('comfyui/status', {}))
+      return
+    }
+    const label = workflowName(server)
+    setConverting(key)
+    try {
+      setComfy(await call('comfyui/importServer', { path: server, role }))
+      toast(`Imported ${label} from ComfyUI`, 'success')
+    } catch (e) {
+      toast(`${label}: ${(e as Error).message}`, 'error')
+    } finally {
+      setConverting(null)
+    }
+  }
+
+  const templateOptions = (role: 'image' | 'model3d') => {
+    if (templates === 'loading') {
+      return (
+        <optgroup label="Your ComfyUI">
+          <option disabled>Checking what it can run…</option>
+        </optgroup>
+      )
+    }
+    if (!templates || templates.error) return null
+    const all: ComfyTemplate[] = role === 'image' ? templates.image : templates.model3d
+    const local = all.filter((t) => !t.partner)
+    const partner = all.filter((t) => t.partner)
+    const option = (t: ComfyTemplate) => (
+      <option key={t.name} value={TEMPLATE + t.name}>
+        {t.title}
+      </option>
+    )
+    return (
+      <>
+        {local.length > 0 && <optgroup label="Ready on your ComfyUI">{local.map(option)}</optgroup>}
+        {partner.length > 0 && (
+          <optgroup label="Comfy.org partners (credits)">
+            {comfy?.hasComfyOrgKey ? partner.map(option) : <option disabled>{`${partner.length} more need a Comfy.org API key (ComfyUI section below)`}</option>}
+          </optgroup>
+        )}
+      </>
+    )
   }
 
   const removeModel = async (m: ModelInfo) => {
@@ -511,25 +728,40 @@ export function ModelsSettings() {
                   className="select"
                   style={{ maxWidth: 380 }}
                   value={current}
-                  disabled={!comfy?.url}
+                  disabled={!comfy?.url || converting != null}
                   onChange={(e) => void setWorkflow(g.key, e.target.value)}
                   aria-label={`${g.label} workflow`}
                 >
                   <option value="">{comfy?.url ? 'Off' : 'Set a ComfyUI server below'}</option>
                   {current && !usable.some((w) => w.name === current) && <option value={current}>{current} (missing)</option>}
-                  {usable.map((w) => (
-                    <option key={w.name} value={w.name}>
-                      {w.name}
-                    </option>
-                  ))}
+                  {usable.length > 0 && (
+                    <optgroup label="Imported">
+                      {usable.map((w) => (
+                        <option key={w.name} value={w.name}>
+                          {w.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {comfy?.reachable && templateOptions(g.key === 'image_workflow' ? 'image' : 'model3d')}
+                  {(comfy?.serverWorkflows.length ?? 0) > 0 && (
+                    <optgroup label="Saved in ComfyUI">
+                      {comfy!.serverWorkflows.map((p) => (
+                        <option key={p} value={SERVER + p}>
+                          {workflowName(p)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
+                {converting === g.key && <span className="xs subtle">Converting…</span>}
               </div>
             )
           })}
         </div>
       </section>
 
-      <ComfySection status={comfy} onChange={setComfy} />
+      <ComfySection status={comfy} onChange={setComfy} templates={templates} reloadTemplates={() => loadTemplates(true)} />
 
       <section>
         <h3 style={{ margin: '0 0 8px' }}>Models</h3>
