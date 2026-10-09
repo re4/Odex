@@ -280,6 +280,8 @@ pub struct ComfyUiSettings {
     pub api_key: Option<String>,
     pub api_key_header: Option<String>,
     pub headers: BTreeMap<String, String>,
+    /// Comfy.org key for partner nodes (env or plain); the desktop's secret takes precedence.
+    pub comfy_org_api_key: Option<String>,
     pub image_workflow: Option<String>,
     pub model3d_workflow: Option<String>,
     pub workflows_dir: PathBuf,
@@ -430,6 +432,12 @@ impl Settings {
                     .filter(|k| !k.trim().is_empty()),
                 api_key_header: comfy.api_key_header.map(|h| h.trim().to_string()).filter(|h| !h.is_empty()),
                 headers: comfy.headers,
+                comfy_org_api_key: comfy
+                    .comfy_org_api_key_env
+                    .as_ref()
+                    .and_then(|v| std::env::var(v).ok())
+                    .or(comfy.comfy_org_api_key)
+                    .filter(|k| !k.trim().is_empty()),
                 image_workflow: comfy.image_workflow.filter(|w| !w.is_empty()),
                 model3d_workflow: comfy.model3d_workflow.filter(|w| !w.is_empty()),
                 workflows_dir: comfy

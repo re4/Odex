@@ -253,15 +253,24 @@ pub fn spawn_agent() -> ToolSpec {
 }
 
 /// `generate_image`: parameters follow the ComfyUI workflow's placeholders
-/// (`None` when the workflow couldn't be read).
-pub fn generate_image(placeholders: Option<&[String]>) -> ToolSpec {
-    generation(
-        "generate_image",
+/// (`None` when the workflow couldn't be read). `ideogram4`: the workflow runs Ideogram 4, which
+/// reads structured JSON captions.
+pub fn generate_image(placeholders: Option<&[String]>, ideogram4: bool) -> ToolSpec {
+    let mut description = String::from(
         "Generate an image with the user's ComfyUI workflow and save it in the workspace \
          (default generated/<prompt words>.png). Write a detailed visual prompt: subject, style, composition, lighting.",
-        placeholders,
-        true,
-    )
+    );
+    if ideogram4 {
+        description.push_str(
+            " The workflow runs Ideogram 4, which reads structured JSON captions: pass `prompt` as a JSON object such as \
+             {\"high_level_description\": \"...\", \"style_description\": {\"aesthetics\": \"...\", \"lighting\": \"...\", \"medium\": \"...\"}, \
+             \"compositional_deconstruction\": {\"background\": \"...\", \"elements\": [{\"type\": \"obj\", \"desc\": \"...\"}]}}. \
+             Describe the scene in several sentences, including the everyday context of objects that could be misread \
+             (a scythe leaning on a barn wall in a wheat field, a kitchen knife on a cutting board): short or context-free \
+             prompts are often refused by the model's safety filter. Plain text is sent as the high_level_description.",
+        );
+    }
+    generation("generate_image", &description, placeholders, true)
 }
 
 /// `generate_3d`: like [`generate_image`], for a 3D-model workflow.
@@ -469,10 +478,10 @@ mod tests {
         );
         let ph = vec!["prompt".to_string(), "width".to_string()];
         assert_eq!(
-            props(generate_image(Some(&ph))),
+            props(generate_image(Some(&ph), false)),
             (vec!["prompt".into(), "width".into(), "seed".into(), "path".into()], json!(["prompt"]))
         );
-        let (p, req) = props(generate_image(None));
+        let (p, req) = props(generate_image(None, false));
         assert_eq!(p, vec!["prompt", "negative_prompt", "width", "height", "seed", "path"]);
         assert_eq!(req, json!(["prompt"]));
     }

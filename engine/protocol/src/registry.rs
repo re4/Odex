@@ -93,6 +93,9 @@ requests!(CLIENT_REQUESTS, method {
     PRESET_LIST = "preset/list": EmptyParams => PresetListResponse,
     COMFYUI_STATUS = "comfyui/status": EmptyParams => ComfyStatusResponse,
     COMFYUI_IMPORT = "comfyui/import": PathParams => ComfyStatusResponse,
+    COMFYUI_IMPORT_SERVER = "comfyui/importServer": ComfyImportServerParams => ComfyStatusResponse,
+    COMFYUI_TEMPLATES = "comfyui/templates": EmptyParams => ComfyTemplatesResponse,
+    COMFYUI_USE_TEMPLATE = "comfyui/useTemplate": ComfyUseTemplateParams => ComfyStatusResponse,
 
     CONFIG_READ = "config/read": EmptyParams => ConfigReadResponse,
     CONFIG_WRITE = "config/write": ConfigWriteParams => ConfigReadResponse,

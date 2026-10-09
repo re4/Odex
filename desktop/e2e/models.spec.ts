@@ -38,6 +38,8 @@ test.beforeAll(async () => {
     [
       { when: { last_role: 'user', last_user_contains: 'draw a lighthouse' }, reply: { kind: 'tool_calls', calls: [{ name: 'generate_image', arguments: { prompt: 'A lighthouse at dusk' } }] } },
       { when: { last_role: 'tool', last_user_contains: 'draw a lighthouse' }, reply: { kind: 'text', text: 'Your lighthouse is ready.' } },
+      { when: { last_role: 'user', last_user_contains: 'paint a fox' }, reply: { kind: 'tool_calls', calls: [{ name: 'generate_image', arguments: { prompt: 'A red fox' } }] } },
+      { when: { last_role: 'tool', last_user_contains: 'paint a fox' }, reply: { kind: 'text', text: 'Your fox is ready.' } },
       { when: { structured: true }, reply: { kind: 'text', text: '{"title":"Lighthouse"}' } },
       { when: {}, reply: { kind: 'text', text: 'OK' } },
     ],
@@ -89,7 +91,17 @@ test('ComfyUI: connect, pick a workflow, generate an image', async () => {
   await expect.poll(configText).toContain(`url = "${mock.comfyUrl}"`)
   await expect(image).toBeEnabled()
   await expect(page.getByText(/UI-format workflow/)).toBeVisible()
-  await expect(image.locator('option')).toHaveText(['Off', 'flux'])
+  // imported workflows, ComfyUI's templates the server can run, then the ones saved in ComfyUI itself
+  await expect(page.getByTestId('comfy-templates')).toContainText('ready on your ComfyUI')
+  await expect(image.locator('option')).toHaveText([
+    'Off',
+    'flux',
+    'Ideogram 4.0 (ComfyUI-Ideogram4 nodes)',
+    'Ideogram v4 Int8: Text to Image',
+    '1 more need a Comfy.org API key (ComfyUI section below)',
+    '3d/image to mesh',
+    'txt2img',
+  ])
   await image.selectOption('flux')
   await expect.poll(configText).toMatch(/image_workflow = "flux"/)
   await expect(page.locator('.badge', { hasText: 'Image generation' })).toBeVisible()
@@ -115,6 +127,59 @@ test('ComfyUI: connect, pick a workflow, generate an image', async () => {
   await page.screenshot({ path: path.join(SHOTS, 'generated.png') })
 })
 
+test('ComfyUI: use workflows saved in ComfyUI', async () => {
+  const { page } = L
+  await openPanel(page, 'Context')
+  await openPanel(page, 'Models & Endpoints')
+  const image = page.getByLabel('Image generation workflow')
+  const model3d = page.getByLabel('3D generation workflow')
+  await expect(image.locator('optgroup[label="Saved in ComfyUI"] option')).toHaveText(['3d/image to mesh', 'txt2img'])
+
+  // picking one converts it (UI format → API format), finds its prompt box and assigns it
+  await image.selectOption({ label: 'txt2img' })
+  await expect(page.getByText('Imported txt2img from ComfyUI')).toBeVisible()
+  await expect.poll(configText).toMatch(/image_workflow = "txt2img"/)
+  await expect(image).toHaveValue('txt2img')
+  await model3d.selectOption({ label: '3d/image to mesh' })
+  await expect.poll(configText).toMatch(/model3d_workflow = "image to mesh"/)
+  const row = (name: string) => page.locator('.row.small', { has: page.locator('b', { hasText: new RegExp(`^${name}$`) }) })
+  await expect(row('txt2img')).toContainText('{{prompt}}')
+  await expect(row('image to mesh')).toContainText('{{image}}')
+  const saved = JSON.parse(fs.readFileSync(path.join(L.home, 'comfyui', 'txt2img.json'), 'utf8'))
+  expect(saved['6'].inputs.text).toBe('{{prompt}}')
+  expect(saved['3'].inputs.positive).toEqual(['6', 0])
+  await page.getByRole('heading', { name: 'Roles' }).scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(SHOTS, 'comfyui-saved.png') })
+
+  // and the agent generates with it
+  await page.getByRole('button', { name: 'Back to app' }).click()
+  const t = await rpc(page, 'thread/start', { cwd: L.project, name: 'Fox' })
+  await page.evaluate((id) => (window as any).__odexStore.getState().selectThread(id), t.thread.id)
+  const box = page.getByRole('textbox', { name: 'Message' })
+  await box.fill('Please paint a fox')
+  await box.press('Enter')
+  await expect(page.getByText('Your fox is ready.')).toBeVisible()
+  expect(fs.existsSync(path.join(L.project, 'generated', 'a-red-fox.png'))).toBe(true)
+})
+
+test('ComfyUI: remove an imported workflow', async () => {
+  const { page } = L
+  await openPanel(page, 'Context')
+  await openPanel(page, 'Models & Endpoints')
+  const model3d = page.getByLabel('3D generation workflow')
+  await expect(model3d).toHaveValue('image to mesh')
+  await page.getByRole('button', { name: 'Remove workflow image to mesh' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Remove workflow' })
+  await expect(dialog).toContainText('3D generation goes back to Off')
+  await dialog.getByRole('button', { name: 'Remove', exact: true }).click()
+  await expect(page.locator('.row.small b', { hasText: /^image to mesh$/ })).toHaveCount(0)
+  await expect(model3d).toHaveValue('')
+  await expect.poll(configText).not.toMatch(/model3d_workflow/)
+  expect(fs.existsSync(path.join(L.home, 'comfyui', 'image to mesh.json'))).toBe(false)
+  // the other role keeps its workflow
+  await expect(page.getByLabel('Image generation workflow')).toHaveValue('txt2img')
+})
+
 test('ComfyUI behind an auth proxy: the API key is stored encrypted and sent', async () => {
   const m = await startMock([{ when: {}, reply: { kind: 'text', text: 'OK' } }], { comfy: true, comfyApiKey: 's3cret-key' })
   const l = await launch({ mockUrl: m.url })
@@ -130,6 +195,7 @@ test('ComfyUI behind an auth proxy: the API key is stored encrypted and sent', a
     await key.fill('s3cret-key')
     await key.press('Enter')
     await expect(page.getByText('Connected · ComfyUI 0.3.60-mock')).toBeVisible()
+    await expect(page.getByTestId('comfy-saved')).toHaveText('2 workflows saved in ComfyUI: pick one under Image generation or 3D generation above.')
     await expect(key).toHaveAttribute('placeholder', /saved/)
     await page.getByRole('heading', { name: 'ComfyUI' }).scrollIntoViewIfNeeded()
     await page.screenshot({ path: path.join(SHOTS, 'comfyui-api-key.png') })
@@ -148,8 +214,84 @@ test('ComfyUI behind an auth proxy: the API key is stored encrypted and sent', a
     await page.getByLabel('Key header').press('Enter')
     await expect(page.getByText('Connected · ComfyUI 0.3.60-mock')).toBeVisible()
 
+    // the Comfy.org key for partner nodes (Ideogram): encrypted the same way
+    const org = page.getByLabel('Comfy.org API key', { exact: true })
+    await org.fill('comfyui-org-key')
+    await org.press('Enter')
+    await expect(page.getByText('Comfy.org API key saved')).toBeVisible()
+    await expect(org).toHaveAttribute('placeholder', /saved/)
+    const stored = fs.readFileSync(path.join(l.home, 'secrets.json'), 'utf8')
+    expect(stored).toContain('comfyui:comfy_org_api_key')
+    expect(stored).not.toContain('comfyui-org-key')
+    expect((await rpc(page, 'comfyui/status')).hasComfyOrgKey).toBe(true)
+
     await page.getByRole('button', { name: 'Remove ComfyUI API key' }).click()
     await expect(page.getByText('HTTP 401 Unauthorized: the server needs an API key')).toBeVisible()
+  } finally {
+    await l.close()
+    m.stop()
+  }
+})
+
+test('ComfyUI templates: the ones the server can run, picked in one step', async () => {
+  const m = await startMock(
+    [
+      { when: { last_role: 'user', last_user_contains: 'dog image' }, reply: { kind: 'tool_calls', calls: [{ name: 'generate_image', arguments: { prompt: 'A happy dog' } }] } },
+      { when: { last_role: 'tool', last_user_contains: 'dog image' }, reply: { kind: 'text', text: 'Here is your dog.' } },
+      { when: {}, reply: { kind: 'text', text: 'OK' } },
+    ],
+    { comfy: true, comfyNoSaved: true },
+  )
+  const l = await launch({ mockUrl: m.url })
+  try {
+    const { page } = l
+    await engineReady(page)
+    await openPanel(page, 'Models & Endpoints')
+    await page.getByLabel('Server URL').fill(m.comfyUrl!)
+    await page.getByLabel('Server URL').press('Enter')
+    await expect(page.getByText('Connected · ComfyUI 0.3.60-mock')).toBeVisible()
+    await expect(page.getByTestId('comfy-saved')).toContainText('Nothing is saved in ComfyUI yet')
+    const summary = page.getByTestId('comfy-templates')
+    await expect(summary).toContainText('5 ready on your ComfyUI, 2 templates need models or nodes it doesn’t have.')
+
+    // nothing saved: the dropdowns offer the library's templates the server has everything for
+    const image = page.getByLabel('Image generation workflow')
+    const model3d = page.getByLabel('3D generation workflow')
+    await expect(image.locator('optgroup[label="Saved in ComfyUI"]')).toHaveCount(0)
+    await expect(image.locator('optgroup[label="Ready on your ComfyUI"] option')).toHaveText(['Ideogram 4.0 (ComfyUI-Ideogram4 nodes)', 'Ideogram v4 Int8: Text to Image'])
+    await expect(image.locator('optgroup[label="Comfy.org partners (credits)"] option')).toHaveText(['1 more need a Comfy.org API key (ComfyUI section below)'])
+    await expect(model3d.locator('optgroup[label="Ready on your ComfyUI"] option')).toHaveText(['Pixal3D (ComfyUI_RH_Pixal3D nodes)', 'Pixal3D & TRELLIS.2: Image to Model'])
+    await summary.getByText('What the other templates need').click()
+    await expect(summary).toContainText('Flux.1 Dev: Text to Image: flux1-dev.safetensors')
+    await expect(summary).toContainText('Tripo: Image to Model: node TripoImageToModelNode')
+    await page.getByRole('heading', { name: 'Roles' }).scrollIntoViewIfNeeded()
+    await page.screenshot({ path: path.join(SHOTS, 'comfyui-templates.png') })
+
+    // the node packs' own workflows (what a server with ComfyUI-Ideogram4 and ComfyUI_RH_Pixal3D runs)
+    await image.selectOption({ label: 'Ideogram 4.0 (ComfyUI-Ideogram4 nodes)' })
+    await expect(page.getByText('Image generation now uses Ideogram 4.0 (ComfyUI-Ideogram4 nodes)')).toBeVisible()
+    await expect(image).toHaveValue('Ideogram 4.0 (ComfyUI-Ideogram4 nodes)')
+    await model3d.selectOption({ label: 'Pixal3D (ComfyUI_RH_Pixal3D nodes)' })
+    await expect(model3d).toHaveValue('Pixal3D (ComfyUI_RH_Pixal3D nodes)')
+    const config = () => fs.readFileSync(path.join(l.home, 'config.toml'), 'utf8')
+    await expect.poll(config).toMatch(/image_workflow = "Ideogram 4.0 \(ComfyUI-Ideogram4 nodes\)"/)
+    await expect.poll(config).toMatch(/model3d_workflow = "Pixal3D \(ComfyUI_RH_Pixal3D nodes\)"/)
+
+    // with a Comfy.org key the partner templates show up too
+    const org = page.getByLabel('Comfy.org API key', { exact: true })
+    await org.fill('comfyui-org-key')
+    await org.press('Enter')
+    await expect(image.locator('optgroup[label="Comfy.org partners (credits)"] option')).toHaveText(['Ideogram v4: Text to Image (API)'])
+
+    // and "generate me a dog image" runs Ideogram 4.0 on ComfyUI
+    await page.getByRole('button', { name: 'Back to app' }).click()
+    const t = await rpc(page, 'thread/start', { cwd: l.project, name: 'Dog' })
+    await page.evaluate((id) => (window as any).__odexStore.getState().selectThread(id), t.thread.id)
+    const box = page.getByRole('textbox', { name: 'Message' })
+    await box.fill('generate me a dog image')
+    await box.press('Enter')
+    await expect(page.getByText('Here is your dog.')).toBeVisible()
+    expect(fs.existsSync(path.join(l.project, 'generated', 'a-happy-dog.png'))).toBe(true)
   } finally {
     await l.close()
     m.stop()

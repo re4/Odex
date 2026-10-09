@@ -113,3 +113,40 @@ async fn sends_the_api_key() {
     assert!(ComfyClient::with_auth(&m.url, Some("k"), Some("bad header"), &none).is_err());
     assert!(ComfyClient::with_auth(&m.url, Some("line\nbreak"), None, &none).is_err());
 }
+
+#[tokio::test]
+async fn reads_saved_workflows_and_converts_them() {
+    let m = MockComfy::start().await;
+    let c = ComfyClient::new(&m.url);
+    assert_eq!(c.server_workflows().await.unwrap(), vec!["3d/image to mesh.json", "txt2img.json"]);
+    let info = c.object_info().await.unwrap();
+    // a subfolder and a space in the name: one percent-encoded path segment
+    let mesh = c.server_workflow("3d/image to mesh.json").await.unwrap();
+    let api = odex_comfyui::ui_format::to_api(&mesh, &info).unwrap();
+    assert_eq!(api["2"]["inputs"], json!({"image": ["1", 0], "steps": 30}));
+    assert_eq!(api["1"]["inputs"], json!({"image": "chair.png"}));
+
+    let txt2img = odex_comfyui::ui_format::to_api(&c.server_workflow("txt2img.json").await.unwrap(), &info).unwrap();
+    let id = c.queue(&txt2img).await.unwrap();
+    assert_eq!(m.prompts()[0]["3"]["inputs"]["positive"], json!(["6", 0]));
+    assert_eq!(c.wait(&id, Duration::from_secs(10)).await.unwrap()[0].filename, "ComfyUI_00001_.png");
+    assert!(c.server_workflow("missing.json").await.is_err());
+}
+
+#[tokio::test]
+async fn lists_saved_workflows_old_and_new_api() {
+    let m = MockComfy::start().await;
+    let c = ComfyClient::new(&m.url);
+    let both = vec!["3d/image to mesh.json", "txt2img.json"];
+    // a server (or proxy) without /userdata: the /v2/userdata listing, folders included
+    m.v2_userdata_only();
+    assert_eq!(c.server_workflows().await.unwrap(), both);
+    // a failing listing is an error, not an empty list
+    m.break_userdata();
+    let e = c.server_workflows().await.unwrap_err().to_string();
+    assert_eq!(e, "HTTP 500 Internal Server Error: 500 Internal Server Error");
+    // nothing saved yet: ComfyUI answers 404 "Directory not found"
+    let empty = MockComfy::start().await;
+    empty.clear_saved();
+    assert!(ComfyClient::new(&empty.url).server_workflows().await.unwrap().is_empty());
+}

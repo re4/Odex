@@ -434,6 +434,13 @@ pub struct ComfyUiToml {
     /// Extra headers sent with every request.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
+    /// Comfy.org API key for partner (API) nodes such as Ideogram, sent with each run as
+    /// `extra_data.api_key_comfy_org`. Prefer `comfy_org_api_key_env` or the desktop's encrypted store.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comfy_org_api_key: Option<String>,
+    /// Environment variable holding the Comfy.org API key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comfy_org_api_key_env: Option<String>,
     /// Workflow (file name without `.json`) used by `generate_image`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_workflow: Option<String>,

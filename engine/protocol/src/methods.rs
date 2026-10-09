@@ -409,14 +409,72 @@ pub struct ComfyStatusResponse {
     pub has_api_key: bool,
     /// `comfyui.api_key_header`; unset means `Authorization: Bearer`.
     pub api_key_header: Option<String>,
+    /// A Comfy.org API key is set (for partner nodes such as Ideogram).
+    pub has_comfy_org_key: bool,
     /// The server answered `/system_stats`.
     pub reachable: bool,
     pub version: Option<String>,
     pub error: Option<String>,
     pub workflows_dir: String,
     pub workflows: Vec<ComfyWorkflowInfo>,
+    /// Workflows saved in ComfyUI itself (paths like `flux.json`), when the server answers.
+    pub server_workflows: Vec<String>,
+    /// Why ComfyUI's saved workflows couldn't be listed.
+    pub server_workflows_error: Option<String>,
     pub image_workflow: Option<String>,
     pub model3d_workflow: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComfyTemplate {
+    /// Name in ComfyUI's template library, e.g. `image_ideogram4_t2i_int8`.
+    pub name: String,
+    /// e.g. "Ideogram v4 Int8: Text to Image"
+    pub title: String,
+    /// Model families, e.g. `["Ideogram"]`.
+    pub models: Vec<String>,
+    /// Runs on a partner's cloud through Comfy.org (needs a Comfy.org API key and credits).
+    pub partner: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComfyTemplateUnavailable {
+    pub title: String,
+    /// Missing node types (`node <type>`) or model files, or why it can't be converted.
+    pub missing: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComfyTemplatesResponse {
+    /// Text-to-image templates this server can run.
+    pub image: Vec<ComfyTemplate>,
+    /// Image-to-3D templates this server can run.
+    pub model3d: Vec<ComfyTemplate>,
+    /// Templates that need nodes or models the server doesn't have.
+    pub unavailable: Vec<ComfyTemplateUnavailable>,
+    /// Why the template library couldn't be read.
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComfyUseTemplateParams {
+    /// A name from `comfyui/templates`.
+    pub name: String,
+    /// `"image"` (generate_image) or `"model3d"` (generate_3d).
+    pub role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ComfyImportServerParams {
+    /// A path from `serverWorkflows`.
+    pub path: String,
+    /// Also use it for `"image"` (generate_image) or `"model3d"` (generate_3d).
+    pub role: Option<String>,
 }
 
 // -------------------------------------------------------------------- config

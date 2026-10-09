@@ -901,6 +901,13 @@ pub fn preset_list(engine: &Engine) -> PresetListResponse {
 
 /// Secret-store key of the ComfyUI API key (set by the desktop, encrypted at rest).
 pub const COMFY_API_KEY_SECRET: &str = "comfyui:api_key";
+/// Secret-store key of the Comfy.org API key for partner nodes.
+pub const COMFY_ORG_KEY_SECRET: &str = "comfyui:comfy_org_api_key";
+
+/// The Comfy.org key: the desktop's secret first, then `comfy_org_api_key_env` / `comfy_org_api_key`.
+fn comfy_org_key(engine: &Engine, c: &odex_config::ComfyUiSettings) -> Option<String> {
+    engine.secrets.read().unwrap().get(COMFY_ORG_KEY_SECRET).cloned().or_else(|| c.comfy_org_api_key.clone())
+}
 
 /// The ComfyUI API key: the desktop's secret first, then `api_key_env` / `api_key`.
 fn comfy_api_key(engine: &Engine, c: &odex_config::ComfyUiSettings) -> Option<String> {
@@ -914,29 +921,40 @@ pub(crate) fn comfy_client(
     url: &str,
 ) -> anyhow::Result<odex_comfyui::ComfyClient> {
     let key = comfy_api_key(engine, c);
-    odex_comfyui::ComfyClient::with_auth(url, key.as_deref(), c.api_key_header.as_deref(), &c.headers)
+    let client = odex_comfyui::ComfyClient::with_auth(url, key.as_deref(), c.api_key_header.as_deref(), &c.headers)?;
+    Ok(client.with_comfy_org_key(comfy_org_key(engine, c).as_deref()))
 }
 
-/// The ComfyUI server's health plus the workflows on disk.
+/// The ComfyUI server's health plus the workflows on disk and saved on the server.
 pub async fn comfy_status(engine: &Engine) -> ComfyStatusResponse {
     let c = engine.user_settings().comfyui;
-    let (reachable, version, error) = match &c.url {
-        Some(url) => match comfy_client(engine, &c, url) {
-            Ok(client) => match client.system_stats().await {
-                Ok(v) => (true, odex_comfyui::ComfyClient::version(&v), None),
-                Err(e) => (false, None, Some(format!("{e:#}"))),
-            },
-            Err(e) => (false, None, Some(format!("{e:#}"))),
+    let (mut reachable, mut version, mut error) = (false, None, None);
+    let (mut server_workflows, mut server_workflows_error) = (Vec::new(), None);
+    match c.url.as_deref().map(|url| comfy_client(engine, &c, url)) {
+        Some(Ok(client)) => match client.system_stats().await {
+            Ok(v) => {
+                reachable = true;
+                version = odex_comfyui::ComfyClient::version(&v);
+                match client.server_workflows().await {
+                    Ok(w) => server_workflows = w,
+                    Err(e) => server_workflows_error = Some(format!("{e:#}")),
+                }
+            }
+            Err(e) => error = Some(format!("{e:#}")),
         },
-        None => (false, None, None),
-    };
+        Some(Err(e)) => error = Some(format!("{e:#}")),
+        None => {}
+    }
     ComfyStatusResponse {
         reachable,
         version,
         error,
         workflows_dir: c.workflows_dir.to_string_lossy().to_string(),
         workflows: odex_comfyui::list_workflows(&c.workflows_dir),
+        server_workflows,
+        server_workflows_error,
         has_api_key: comfy_api_key(engine, &c).is_some(),
+        has_comfy_org_key: comfy_org_key(engine, &c).is_some(),
         api_key_header: c.api_key_header.clone(),
         url: c.url,
         image_workflow: c.image_workflow,
@@ -944,10 +962,117 @@ pub async fn comfy_status(engine: &Engine) -> ComfyStatusResponse {
     }
 }
 
-/// Copy an API-format workflow export into the workflows folder.
+/// A saved (UI-format) workflow in API format, using the server's node definitions.
+async fn comfy_convert(client: &odex_comfyui::ComfyClient, ui: &Value) -> EResult<Value> {
+    let info = client.object_info().await.map_err(|e| bad(format!("{e:#}")))?;
+    odex_comfyui::ui_format::to_api(ui, &info).map_err(|e| bad(format!("can't convert this workflow: {e}")))
+}
+
+/// Import a workflow file into the workflows folder: an API export as it is, a saved (UI-format)
+/// workflow converted with the server's node definitions. Missing placeholders are added.
 pub async fn comfy_import(engine: &Engine, p: PathParams) -> EResult<ComfyStatusResponse> {
+    let c = engine.user_settings().comfyui;
+    let path = Path::new(&p.path);
+    let text = std::fs::read_to_string(path).map_err(|e| bad(format!("cannot read {}: {e}", path.display())))?;
+    let mut graph: Value = serde_json::from_str(&text).map_err(|e| bad(format!("not valid JSON: {e}")))?;
+    if odex_comfyui::ui_format::is_ui_format(&graph) {
+        let Some(url) = c.url.as_deref() else {
+            return Err(bad("this is a saved (UI-format) workflow. Set the ComfyUI server URL first so Odex can convert it, or use Workflow → Export (API) in ComfyUI"));
+        };
+        let client = comfy_client(engine, &c, url).map_err(|e| bad(format!("{e:#}")))?;
+        graph = comfy_convert(&client, &graph).await?;
+    }
+    let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    odex_comfyui::save_workflow(&c.workflows_dir, &name, graph, odex_comfyui::Kind::Unknown).map_err(bad)?;
+    Ok(comfy_status(engine).await)
+}
+
+/// The config key a generation role's workflow goes in.
+fn comfy_role_key(role: Option<&str>) -> EResult<Option<&'static str>> {
+    match role {
+        None => Ok(None),
+        Some("image") => Ok(Some("comfyui.image_workflow")),
+        Some("model3d") => Ok(Some("comfyui.model3d_workflow")),
+        Some(r) => Err(bad(format!("unknown role `{r}` (use image or model3d)"))),
+    }
+}
+
+/// Save a workflow and optionally assign it to a role.
+fn comfy_save(engine: &Engine, name: &str, graph: Value, role_key: Option<&str>) -> EResult<()> {
     let dir = engine.user_settings().comfyui.workflows_dir;
-    odex_comfyui::import_workflow(&dir, Path::new(&p.path)).map_err(bad)?;
+    let kind = match role_key {
+        Some("comfyui.image_workflow") => odex_comfyui::Kind::Image,
+        Some(_) => odex_comfyui::Kind::Model3d,
+        None => odex_comfyui::Kind::Unknown,
+    };
+    let name = odex_comfyui::save_workflow(&dir, name, graph, kind).map_err(bad)?;
+    if let Some(key) = role_key {
+        config_write(
+            engine,
+            ConfigWriteParams {
+                edits: vec![ConfigEdit { key_path: key.into(), value: json!(name) }],
+                project_path: None,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+/// What this server can run for images and 3D: Odex's workflows for installed node packs (Ideogram
+/// 4.0, Pixal3D) and ComfyUI's library templates it has every node and model for; and what the
+/// other templates lack.
+pub async fn comfy_templates(engine: &Engine) -> ComfyTemplatesResponse {
+    let mut res = ComfyTemplatesResponse { image: vec![], model3d: vec![], unavailable: vec![], error: None };
+    let c = engine.user_settings().comfyui;
+    let Some(url) = c.url.as_deref() else { return res };
+    let scan = match comfy_client(engine, &c, url) {
+        Ok(client) => client.usable_templates().await,
+        Err(e) => Err(e),
+    };
+    match scan {
+        Ok((ready, unavailable)) => {
+            for t in ready {
+                let item = ComfyTemplate { name: t.name, title: t.title, models: t.models, partner: t.partner };
+                match t.kind {
+                    odex_comfyui::Kind::Model3d => res.model3d.push(item),
+                    _ => res.image.push(item),
+                }
+            }
+            res.unavailable = unavailable
+                .into_iter()
+                .map(|u| ComfyTemplateUnavailable { title: u.title, missing: u.missing })
+                .collect();
+        }
+        Err(e) => res.error = Some(format!("{e:#}")),
+    }
+    res
+}
+
+/// Convert a library template for this server, save it under its title and use it for a role.
+pub async fn comfy_use_template(engine: &Engine, p: ComfyUseTemplateParams) -> EResult<ComfyStatusResponse> {
+    let role_key = comfy_role_key(Some(&p.role))?;
+    let kind = if p.role == "model3d" { odex_comfyui::Kind::Model3d } else { odex_comfyui::Kind::Image };
+    let c = engine.user_settings().comfyui;
+    let Some(url) = c.url.as_deref() else { return Err(bad("set the ComfyUI server URL first")) };
+    let client = comfy_client(engine, &c, url).map_err(|e| bad(format!("{e:#}")))?;
+    let (title, graph) = client.template_workflow(&p.name, kind).await.map_err(|e| bad(format!("{e:#}")))?;
+    comfy_save(engine, &title, graph, role_key)?;
+    Ok(comfy_status(engine).await)
+}
+
+/// Import a workflow saved on the ComfyUI server (converted to API format), and optionally use it
+/// for image or 3D generation.
+pub async fn comfy_import_server(engine: &Engine, p: ComfyImportServerParams) -> EResult<ComfyStatusResponse> {
+    let role_key = comfy_role_key(p.role.as_deref())?;
+    let c = engine.user_settings().comfyui;
+    let Some(url) = c.url.as_deref() else { return Err(bad("set the ComfyUI server URL first")) };
+    let client = comfy_client(engine, &c, url).map_err(|e| bad(format!("{e:#}")))?;
+    let saved = client.server_workflow(&p.path).await.map_err(|e| bad(format!("{e:#}")))?;
+    // a file saved with Export (API) is already in API format
+    let graph =
+        if odex_comfyui::ui_format::is_ui_format(&saved) { comfy_convert(&client, &saved).await? } else { saved };
+    let stem = Path::new(&p.path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    comfy_save(engine, &stem, graph, role_key)?;
     Ok(comfy_status(engine).await)
 }
 

@@ -158,6 +158,9 @@ pub async fn dispatch(engine: &Engine, sink: &RpcSink, method: &str, p: Option<V
         m::PRESET_LIST => ok(api::preset_list(engine)),
         m::COMFYUI_STATUS => ok(api::comfy_status(engine).await),
         m::COMFYUI_IMPORT => ok(api::comfy_import(engine, params(p)?).await?),
+        m::COMFYUI_IMPORT_SERVER => ok(api::comfy_import_server(engine, params(p)?).await?),
+        m::COMFYUI_TEMPLATES => ok(api::comfy_templates(engine).await),
+        m::COMFYUI_USE_TEMPLATE => ok(api::comfy_use_template(engine, params(p)?).await?),
 
         m::CONFIG_READ => ok(api::config_read(engine)),
         m::CONFIG_WRITE => ok(api::config_write(engine, params(p)?)?),

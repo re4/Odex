@@ -1,8 +1,10 @@
 //! API-format workflow templates and their `{{placeholder}}` inputs.
 //!
-//! Export a workflow from ComfyUI with Workflow → Export (API) after typing
-//! `{{prompt}}` (and optionally `{{negative_prompt}}`, `{{width}}`,
-//! `{{height}}`, `{{seed}}`, `{{image}}`) into the widgets they should fill.
+//! Workflows come from ComfyUI's Workflow → Export (API), or from the workflows
+//! saved on the server (converted by [`crate::ui_format`]). `{{prompt}}`
+//! (and optionally `{{negative_prompt}}`, `{{width}}`, `{{height}}`,
+//! `{{seed}}`, `{{image}}`) mark the widgets to fill; when a workflow has none,
+//! [`add_placeholders`] finds the prompt box and the input image.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -53,11 +55,7 @@ impl Workflow {
 
     /// Placeholder names used in node inputs, sorted.
     pub fn placeholders(&self) -> Vec<String> {
-        let mut out = BTreeSet::new();
-        for node in self.graph.as_object().into_iter().flat_map(|o| o.values()) {
-            walk_strings(&node["inputs"], &mut |s| out.extend(find_placeholders(s).into_iter().map(|(_, n)| n)));
-        }
-        out.into_iter().collect()
+        placeholders_of(&self.graph)
     }
 
     pub fn has(&self, name: &str) -> bool {
@@ -76,7 +74,8 @@ impl Workflow {
         if used.iter().any(|p| p == "image") && inputs.image.is_none() {
             return Err("this workflow needs an input image (pass `image`)".into());
         }
-        let seed = inputs.seed.unwrap_or_else(|| rand::random::<u32>() as u64);
+        // below 2^31: some nodes (Pixal3D) cap their seed there
+        let seed = inputs.seed.unwrap_or_else(|| (rand::random::<u32>() >> 1) as u64);
         let value = |name: &str| -> Value {
             match name {
                 "prompt" => json!(inputs.prompt.clone().unwrap_or_default()),
@@ -206,15 +205,141 @@ pub fn list_workflows(dir: &Path) -> Vec<ComfyWorkflowInfo> {
     out
 }
 
-/// Copy an exported workflow into `dir` after checking it; returns its name.
+/// What a workflow makes: image workflows take the agent's prompt, image-to-3D ones only its image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Image,
+    Model3d,
+    /// Not known yet (a file imported without a role): any placeholder may apply.
+    Unknown,
+}
+
+/// Save an exported (API-format) workflow file into `dir`; returns its name. See [`save_workflow`].
 pub fn import_workflow(dir: &Path, src: &Path) -> Result<String, String> {
     let w = Workflow::load(src)?;
+    save_workflow(dir, &w.name, w.graph, Kind::Unknown)
+}
+
+/// Save an API-format graph as `<name>.json` in `dir`, first adding the placeholders it lacks
+/// ([`add_placeholders`]); returns the name it was saved under.
+pub fn save_workflow(dir: &Path, name: &str, mut graph: Value, kind: Kind) -> Result<String, String> {
+    validate(&graph)?;
+    add_placeholders(&mut graph, kind);
+    let name: String = name.chars().filter(|c| !c.is_control() && !r#"<>:"/\|?*"#.contains(*c)).collect();
+    let name = match name.trim().trim_end_matches('.') {
+        "" => "workflow".to_string(),
+        n => n.to_string(),
+    };
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let dest = dir.join(format!("{}.json", w.name));
-    if dest != src {
-        std::fs::copy(src, &dest).map_err(|e| format!("cannot copy to {}: {e}", dest.display()))?;
+    let dest = dir.join(format!("{name}.json"));
+    let text = serde_json::to_string_pretty(&graph).map_err(|e| e.to_string())?;
+    std::fs::write(&dest, text).map_err(|e| format!("cannot write {}: {e}", dest.display()))?;
+    Ok(name)
+}
+
+/// String inputs that hold the prompt in text-encoder (and string primitive) nodes.
+const PROMPT_KEYS: &[&str] = &["text", "text_g", "text_l", "clip_l", "clip_g", "t5xxl", "prompt", "value", "string"];
+/// How far upstream of a sampler's `positive` input to look for the prompt.
+const PROMPT_DEPTH: usize = 8;
+
+/// Fill in what a workflow saved without placeholders needs: `{{prompt}}` in the positive prompt
+/// (found from a sampler's `positive` input, else the only text encoder, else the only `prompt`
+/// input; not for image-to-3D workflows) and `{{image}}` in a lone Load Image node. Placeholders the
+/// workflow already has are left alone. Returns those added.
+pub fn add_placeholders(graph: &mut Value, kind: Kind) -> Vec<String> {
+    let used = placeholders_of(graph);
+    let mut added = Vec::new();
+    if kind != Kind::Model3d && !used.iter().any(|p| p == "prompt") {
+        if let Some((id, keys)) = positive_prompt(graph) {
+            for k in keys {
+                graph[&id]["inputs"][&k] = json!("{{prompt}}");
+            }
+            added.push("prompt".to_string());
+        }
     }
-    Ok(w.name)
+    if !used.iter().any(|p| p == "image") {
+        let loads: Vec<String> = graph
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(_, n)| n["class_type"] == "LoadImage" && n["inputs"]["image"].is_string())
+            .map(|(id, _)| id.clone())
+            .collect();
+        if let [id] = loads.as_slice() {
+            graph[id]["inputs"]["image"] = json!("{{image}}");
+            added.push("image".to_string());
+        }
+    }
+    added
+}
+
+/// The node (and its string inputs) holding the positive prompt.
+fn positive_prompt(graph: &Value) -> Option<(String, Vec<String>)> {
+    let nodes = graph.as_object()?;
+    let prompt_keys = |id: &str| -> Vec<String> {
+        nodes[id]["inputs"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(k, v)| PROMPT_KEYS.contains(&k.as_str()) && v.is_string())
+            .map(|(k, _)| k.clone())
+            .collect()
+    };
+    let link = |v: &Value| {
+        v.as_array().and_then(|a| a.first()?.as_str()).filter(|id| nodes.contains_key(*id)).map(String::from)
+    };
+    // upstream of a sampler's `positive` (or a guider's `conditioning`), nearest first
+    let starts = nodes.values().filter_map(|n| {
+        let ins = &n["inputs"];
+        link(&ins["positive"]).or_else(|| {
+            n["class_type"].as_str().filter(|c| c.ends_with("Guider")).and_then(|_| link(&ins["conditioning"]))
+        })
+    });
+    for start in starts {
+        let mut queue = std::collections::VecDeque::from([(start, 0)]);
+        let mut seen = BTreeSet::new();
+        while let Some((id, depth)) = queue.pop_front() {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let keys = prompt_keys(&id);
+            if !keys.is_empty() {
+                return Some((id, keys));
+            }
+            if depth < PROMPT_DEPTH {
+                for v in nodes[&id]["inputs"].as_object().into_iter().flatten().map(|(_, v)| v) {
+                    queue.extend(link(v).map(|l| (l, depth + 1)));
+                }
+            }
+        }
+    }
+    // no sampler to follow: the only text encoder
+    let encoders: Vec<&String> = nodes
+        .iter()
+        .filter(|(id, n)| {
+            n["class_type"].as_str().is_some_and(|c| c.contains("TextEncode")) && !prompt_keys(id).is_empty()
+        })
+        .map(|(id, _)| id)
+        .collect();
+    if let [id] = encoders.as_slice() {
+        return Some(((*id).clone(), prompt_keys(id)));
+    }
+    // partner (API) nodes such as Ideogram: the only node with a `prompt` text input
+    let prompted: Vec<&String> =
+        nodes.iter().filter(|(_, n)| n["inputs"]["prompt"].is_string()).map(|(id, _)| id).collect();
+    match prompted.as_slice() {
+        [id] => Some(((*id).clone(), vec!["prompt".to_string()])),
+        _ => None,
+    }
+}
+
+/// Placeholder names used in a graph's node inputs, sorted.
+fn placeholders_of(graph: &Value) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    for node in graph.as_object().into_iter().flat_map(|o| o.values()) {
+        walk_strings(&node["inputs"], &mut |s| out.extend(find_placeholders(s).into_iter().map(|(_, n)| n)));
+    }
+    out.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -277,6 +402,72 @@ mod tests {
         assert!(e.contains("Export (API)"), "{e}");
         assert!(Workflow::parse("x".into(), "[]").is_err());
         assert!(Workflow::parse("x".into(), r#"{"1": {"inputs": {}}}"#).is_err());
+    }
+
+    #[test]
+    fn adds_missing_placeholders() {
+        // the positive prompt, found through the sampler (the negative one stays as it was)
+        let mut g = json!({
+            "3": {"class_type": "KSampler", "inputs": {"positive": ["10", 0], "negative": ["7", 0], "seed": 1}},
+            "10": {"class_type": "FluxGuidance", "inputs": {"conditioning": ["6", 0], "guidance": 3.5}},
+            "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "a bottle", "clip": ["4", 1]}},
+            "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry", "clip": ["4", 1]}},
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "flux.safetensors"}}
+        });
+        assert_eq!(add_placeholders(&mut g, Kind::Unknown), vec!["prompt"]);
+        assert_eq!(g["6"]["inputs"]["text"], "{{prompt}}");
+        assert_eq!(g["7"]["inputs"]["text"], "blurry");
+        assert_eq!(g["4"]["inputs"]["ckpt_name"], "flux.safetensors");
+        assert!(add_placeholders(&mut g, Kind::Unknown).is_empty(), "already there");
+
+        // a guider pipeline with a dual-encoder node: both of its prompt boxes
+        let mut g = json!({
+            "1": {"class_type": "BasicGuider", "inputs": {"conditioning": ["2", 0], "model": ["5", 0]}},
+            "2": {"class_type": "CLIPTextEncodeFlux", "inputs": {"clip_l": "x", "t5xxl": "y", "guidance": 3.5, "clip": ["5", 1]}}
+        });
+        assert_eq!(add_placeholders(&mut g, Kind::Unknown), vec!["prompt"]);
+        assert_eq!(
+            (g["2"]["inputs"]["clip_l"].as_str(), g["2"]["inputs"]["t5xxl"].as_str()),
+            (Some("{{prompt}}"), Some("{{prompt}}"))
+        );
+
+        // image to 3D: the lone Load Image node; no text encoder, so no prompt
+        let mut g = json!({
+            "1": {"class_type": "LoadImage", "inputs": {"image": "chair.png"}},
+            "2": {"class_type": "SaveGLB", "inputs": {"mesh": ["1", 0], "filename_prefix": "mesh"}}
+        });
+        assert_eq!(add_placeholders(&mut g, Kind::Unknown), vec!["image"]);
+        assert_eq!(g["1"]["inputs"]["image"], "{{image}}");
+        // a partner node (Ideogram) with a plain `prompt` input
+        let mut g = json!({
+            "1": {"class_type": "IdeogramV4", "inputs": {"prompt": "a cat", "aspect_ratio": "1:1", "seed": 0}},
+            "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0], "filename_prefix": "ideogram"}}
+        });
+        assert_eq!(add_placeholders(&mut g, Kind::Unknown), vec!["prompt"]);
+        assert_eq!(g["1"]["inputs"]["prompt"], "{{prompt}}");
+        // image to 3D: only the input image, even with a text encoder in the graph
+        let mut g = json!({
+            "1": {"class_type": "LoadImage", "inputs": {"image": "chair.png"}},
+            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "a chair", "clip": ["3", 0]}}
+        });
+        assert_eq!(add_placeholders(&mut g, Kind::Model3d), vec!["image"]);
+        assert_eq!(g["2"]["inputs"]["text"], "a chair");
+        // two Load Image nodes: ambiguous, left alone
+        let mut g = json!({
+            "1": {"class_type": "LoadImage", "inputs": {"image": "a.png"}},
+            "2": {"class_type": "LoadImage", "inputs": {"image": "b.png"}}
+        });
+        assert!(add_placeholders(&mut g, Kind::Unknown).is_empty());
+    }
+
+    #[test]
+    fn saves_with_placeholders_and_a_safe_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let g = json!({"6": {"class_type": "CLIPTextEncode", "inputs": {"text": "x", "clip": ["4", 1]}}});
+        assert_eq!(save_workflow(dir.path(), "3d/Flux: dev?", g, Kind::Image).unwrap(), "3dFlux dev");
+        let w = Workflow::load(&dir.path().join("3dFlux dev.json")).unwrap();
+        assert_eq!(w.placeholders(), vec!["prompt"]);
+        assert!(save_workflow(dir.path(), "ui", json!({"nodes": [], "links": []}), Kind::Image).is_err());
     }
 
     #[test]

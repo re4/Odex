@@ -11,6 +11,18 @@ hasApiKey: boolean,
  */
 apiKeyHeader?: string | null, 
 /**
+ * A Comfy.org API key is set (for partner nodes such as Ideogram).
+ */
+hasComfyOrgKey: boolean, 
+/**
  * The server answered `/system_stats`.
  */
-reachable: boolean, version?: string | null, error?: string | null, workflowsDir: string, workflows: Array<ComfyWorkflowInfo>, imageWorkflow?: string | null, model3dWorkflow?: string | null, };
+reachable: boolean, version?: string | null, error?: string | null, workflowsDir: string, workflows: Array<ComfyWorkflowInfo>, 
+/**
+ * Workflows saved in ComfyUI itself (paths like `flux.json`), when the server answers.
+ */
+serverWorkflows: Array<string>, 
+/**
+ * Why ComfyUI's saved workflows couldn't be listed.
+ */
+serverWorkflowsError?: string | null, imageWorkflow?: string | null, model3dWorkflow?: string | null, };

@@ -31,6 +31,9 @@ struct Args {
     /// Make the mock ComfyUI require `Authorization: Bearer <key>`.
     #[arg(long)]
     comfy_api_key: Option<String>,
+    /// Start the mock ComfyUI with no saved workflows.
+    #[arg(long)]
+    comfy_no_saved: bool,
 }
 
 #[tokio::main]
@@ -54,6 +57,9 @@ async fn main() -> anyhow::Result<()> {
     let _comfy = match a.comfy_port {
         Some(port) => {
             let c = odex_mock_vllm::comfy::MockComfy::start_on(&format!("{}:{port}", a.host)).await;
+            if a.comfy_no_saved {
+                c.clear_saved();
+            }
             if let Some(k) = &a.comfy_api_key {
                 c.require_header("authorization", &format!("Bearer {k}"));
             }

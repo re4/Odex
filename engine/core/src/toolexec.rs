@@ -94,10 +94,13 @@ fn generation_specs(s: &Settings) -> Vec<ToolSpec> {
     if c.url.is_none() {
         return vec![];
     }
-    let placeholders = |wf: &str| odex_comfyui::Workflow::load(&c.workflow_path(wf)).ok().map(|w| w.placeholders());
+    let load = |wf: &str| odex_comfyui::Workflow::load(&c.workflow_path(wf)).ok();
+    let placeholders = |wf: &str| load(wf).map(|w| w.placeholders());
     let mut v = Vec::new();
     if let Some(wf) = &c.image_workflow {
-        v.push(specs::generate_image(placeholders(wf).as_deref()));
+        let w = load(wf);
+        let ideogram4 = w.as_ref().is_some_and(|w| odex_comfyui::ideogram::is_ideogram4(&w.graph));
+        v.push(specs::generate_image(w.map(|w| w.placeholders()).as_deref(), ideogram4));
     }
     if let Some(wf) = &c.model3d_workflow {
         v.push(specs::generate_3d(placeholders(wf).as_deref()));
@@ -1188,6 +1191,9 @@ async fn generate(o: &Out<'_>) -> ToolOutcome {
         |k: &str| o.args.get(k).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()).map(String::from);
     let num = |k: &str| o.args.get(k).and_then(|v| v.as_u64());
     let prompt = text("prompt");
+    // Ideogram 4 gets a structured JSON caption; file names and the thread show what it describes
+    let ideogram4 = odex_comfyui::ideogram::is_ideogram4(&wf.graph);
+    let label = prompt.as_deref().map(odex_comfyui::ideogram::summary);
     if !three_d && !wf.has("prompt") {
         return o.err(format!(
             "the ComfyUI workflow `{wf_name}` has no {{{{prompt}}}} placeholder, so every image would come out the same. \
@@ -1204,7 +1210,7 @@ async fn generate(o: &Out<'_>) -> ToolOutcome {
             let fallback = if three_d { "model" } else { "image" };
             unique_stem(
                 &cwd,
-                &format!("generated/{}", slug(prompt.as_deref().unwrap_or(fallback), fallback)),
+                &format!("generated/{}", slug(label.as_deref().unwrap_or(fallback), fallback)),
                 default_ext,
             )
         }
@@ -1233,7 +1239,7 @@ async fn generate(o: &Out<'_>) -> ToolOutcome {
         Err(e) => return fail(format!("ComfyUI: {e:#}")),
     };
     let mut inputs = odex_comfyui::Inputs {
-        prompt: prompt.clone(),
+        prompt: if ideogram4 { prompt.as_deref().map(odex_comfyui::ideogram::caption) } else { prompt.clone() },
         negative_prompt: text("negative_prompt"),
         width: num("width"),
         height: num("height"),
@@ -1285,6 +1291,14 @@ async fn generate(o: &Out<'_>) -> ToolOutcome {
             Ok(b) => b,
             Err(e) => return fail(format!("{e:#}")),
         };
+        if ideogram4 && odex_comfyui::ideogram::looks_refused(&bytes) {
+            return fail(
+                "Ideogram 4 returned a plain gray image: its safety filter refused this prompt (it often misreads short or \
+                 context-free prompts). Nothing was saved. Rewrite it as a fuller JSON caption that gives the everyday \
+                 context and try again."
+                    .into(),
+            );
+        }
         let full = odex_tools::edit::resolve(&cwd, &rel);
         let write = async {
             if let Some(dir) = full.parent() {
@@ -1309,7 +1323,7 @@ async fn generate(o: &Out<'_>) -> ToolOutcome {
             let item = ThreadItem::ImageView {
                 id: format!("{item_id}_{i}"),
                 path: rel.clone(),
-                prompt: Some(prompt.clone().unwrap_or_default()),
+                prompt: Some(label.clone().unwrap_or_default()),
             };
             complete_item(o.engine, o.rt, &o.tctx.turn_id, item);
         }
