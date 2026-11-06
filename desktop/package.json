@@ -1,7 +1,7 @@
 {
   "name": "odex-desktop",
   "productName": "Odex",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Odex: a self-hosted coding agent desktop app for vLLM",
   "main": "out/main/index.js",
   "license": "Apache-2.0",
