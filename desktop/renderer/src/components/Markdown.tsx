@@ -67,8 +67,15 @@ async function mermaidFor(theme: string): Promise<MermaidApi> {
   mermaidLoad ??= import('mermaid').then((m) => m.default)
   const m = await mermaidLoad
   if (mermaidTheme !== theme) {
-    // strict: no click handlers or HTML labels; output is sanitized
-    m.initialize({ startOnLoad: false, securityLevel: 'strict', theme: theme === 'dark' ? 'dark' : 'default' })
+    // strict: no click handlers or HTML labels; output is sanitized.
+    // classic look + dagre: mermaid 12 otherwise defaults to the "neo" look and ELK layout.
+    m.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: theme === 'dark' ? 'dark' : 'default',
+      look: 'classic',
+      layout: 'dagre',
+    })
     mermaidTheme = theme
   }
   return m

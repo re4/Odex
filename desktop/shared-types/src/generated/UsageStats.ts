@@ -2,4 +2,4 @@
 import type { TokenUsage } from "./TokenUsage";
 import type { UsageRow } from "./UsageRow";
 
-export type UsageStats = { rows: Array<UsageRow>, totals: TokenUsage, byModel: { [key in string]?: TokenUsage }, };
+export type UsageStats = { rows: Array<UsageRow>, totals: TokenUsage, byModel: { [key in string]: TokenUsage }, };

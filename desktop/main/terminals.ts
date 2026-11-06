@@ -4,7 +4,8 @@ import { createRequire } from 'node:module'
 import os from 'node:os'
 import { getSettings } from './settings'
 
-const require = createRequire(import.meta.url)
+// Not named `require`: electron-vite's ESM shim declares that at the top of the bundle.
+const requireCjs = createRequire(import.meta.url)
 
 export interface TerminalInfo {
   id: string
@@ -93,7 +94,7 @@ export function createTerminal(opts: {
   /** Open local dev-server URLs printed by this terminal. */
   detectUrls?: boolean
 }): TerminalInfo {
-  const pty = require('@lydell/node-pty') as typeof import('@lydell/node-pty')
+  const pty = requireCjs('@lydell/node-pty') as typeof import('@lydell/node-pty')
   const id = `t${++counter}`
   const cwd = opts.cwd || os.homedir()
   const { file, args } = shellCommand(opts.shell || '')

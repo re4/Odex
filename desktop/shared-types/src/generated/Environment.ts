@@ -9,4 +9,4 @@ setupScript?: string | null,
 /**
  * Per-OS setup scripts; the one for the current OS replaces `setup_script` when set.
  */
-setupScripts?: PerOs | null, env: { [key in string]?: string }, };
+setupScripts?: PerOs | null, env: { [key in string]: string }, };

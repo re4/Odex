@@ -14,7 +14,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use rand::RngCore;
 use reqwest::header::{HeaderMap, ACCEPT, CONTENT_TYPE, WWW_AUTHENTICATE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -44,7 +43,7 @@ pub struct Pkce {
 /// 32 random bytes → 43-char base64url verifier, plus its S256 challenge.
 pub fn generate_pkce() -> Pkce {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::fill(&mut bytes);
     let verifier = URL_SAFE_NO_PAD.encode(bytes);
     Pkce { challenge: pkce_challenge(&verifier), verifier }
 }
@@ -56,7 +55,7 @@ pub fn pkce_challenge(verifier: &str) -> String {
 
 fn random_token(len: usize) -> String {
     let mut bytes = vec![0u8; len];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::fill(&mut bytes[..]);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 

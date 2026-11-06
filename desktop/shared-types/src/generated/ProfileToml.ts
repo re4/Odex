@@ -8,4 +8,4 @@ import type { SandboxMode } from "./SandboxMode";
 /**
  * A profile overrides a subset of top-level settings.
  */
-export type ProfileToml = { model?: string | null, permission_mode?: PermissionMode | null, approval_policy?: ApprovalPolicy | null, sandbox_mode?: SandboxMode | null, reasoning_effort?: ReasoningEffort | null, custom_instructions?: string | null, roles: { [key in string]?: string }, context?: ContextToml | null, };
+export type ProfileToml = { model?: string | null, permission_mode?: PermissionMode | null, approval_policy?: ApprovalPolicy | null, sandbox_mode?: SandboxMode | null, reasoning_effort?: ReasoningEffort | null, custom_instructions?: string | null, roles: { [key in string]: string }, context?: ContextToml | null, };

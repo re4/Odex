@@ -40,7 +40,7 @@ function candidates() {
 /** Newest mtime of any engine source file, to warn about a stale binary. */
 function newestSource(dir, depth = 0) {
   let newest = 0
-  let entries = []
+  let entries
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true })
   } catch {

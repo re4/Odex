@@ -15,10 +15,9 @@
     "isolatedModules": true,
     "allowImportingTsExtensions": false,
     "types": ["node"],
-    "baseUrl": ".",
     "paths": {
-      "@shared/*": ["shared-types/src/*"],
-      "@/*": ["renderer/src/*"]
+      "@shared/*": ["./shared-types/src/*"],
+      "@/*": ["./renderer/src/*"]
     }
   },
   "include": ["main", "preload", "renderer/src", "shared-types/src", "e2e", "electron.vite.config.ts", "playwright.config.ts"]

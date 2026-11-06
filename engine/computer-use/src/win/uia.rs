@@ -11,11 +11,12 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use windows::core::{Interface, BSTR, HSTRING, VARIANT};
+use windows::core::{Interface, BSTR, HSTRING};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::System::Ole::{
     SafeArrayAccessData, SafeArrayDestroy, SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayUnaccessData,
 };
+use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_I4};
 use windows::Win32::UI::Accessibility::*;
 
 use super::window::{info_for, init_dpi_awareness, require_window};
@@ -440,31 +441,23 @@ fn runtime_id(e: &IUIAutomationElement) -> Option<Vec<i32>> {
     }
 }
 
-fn vt(v: &VARIANT) -> u16 {
-    unsafe { v.as_raw().Anonymous.Anonymous.vt }
-}
-
-const VT_I4: u16 = 3;
-const VT_BSTR: u16 = 8;
-const VT_BOOL: u16 = 11;
-
 fn cached(e: &IUIAutomationElement, id: UIA_PROPERTY_ID) -> Option<VARIANT> {
     unsafe { e.GetCachedPropertyValue(id) }.ok()
 }
 
 fn cached_bool(e: &IUIAutomationElement, id: UIA_PROPERTY_ID) -> Option<bool> {
     let v = cached(e, id)?;
-    (vt(&v) == VT_BOOL).then(|| bool::try_from(&v).ok()).flatten()
+    (v.vt() == VT_BOOL).then(|| bool::try_from(&v).ok()).flatten()
 }
 
 fn cached_i32(e: &IUIAutomationElement, id: UIA_PROPERTY_ID) -> Option<i32> {
     let v = cached(e, id)?;
-    (vt(&v) == VT_I4).then(|| i32::try_from(&v).ok()).flatten()
+    (v.vt() == VT_I4).then(|| i32::try_from(&v).ok()).flatten()
 }
 
 fn cached_string(e: &IUIAutomationElement, id: UIA_PROPERTY_ID) -> Option<String> {
     let v = cached(e, id)?;
-    (vt(&v) == VT_BSTR).then(|| BSTR::try_from(&v).ok().map(|b| b.to_string())).flatten()
+    (v.vt() == VT_BSTR).then(|| BSTR::try_from(&v).ok().map(|b| b.to_string())).flatten()
 }
 
 fn truncate_chars(s: String, max: usize) -> String {

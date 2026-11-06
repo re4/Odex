@@ -65,11 +65,7 @@ impl WsTransport {
     /// one if needed) and enables the domains the session needs.
     pub async fn connect(endpoint: &str) -> Result<Self> {
         let (ws_url, http_base) = resolve_browser_ws(endpoint).await?;
-        let config = WebSocketConfig {
-            max_message_size: Some(512 << 20),
-            max_frame_size: Some(256 << 20),
-            ..Default::default()
-        };
+        let config = WebSocketConfig::default().max_message_size(Some(512 << 20)).max_frame_size(Some(256 << 20));
         let (stream, _) = tokio_tungstenite::connect_async_with_config(ws_url.as_str(), Some(config), true)
             .await
             .with_context(|| format!("connecting to DevTools at {ws_url}"))?;
@@ -140,7 +136,7 @@ impl WsTransport {
         }
         let (tx, rx) = oneshot::channel();
         lock(&self.inner.pending).insert(id, tx);
-        let sent = self.inner.sink.lock().await.send(Message::Text(msg.to_string())).await;
+        let sent = self.inner.sink.lock().await.send(Message::Text(msg.to_string().into())).await;
         if let Err(e) = sent {
             lock(&self.inner.pending).remove(&id);
             return Err(anyhow!("sending {method}: {e}"));

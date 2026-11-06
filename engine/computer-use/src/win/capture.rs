@@ -120,20 +120,20 @@ impl Canvas {
     fn new(width: i32, height: i32) -> Result<Self> {
         check_size(width, height)?;
         unsafe {
-            let screen = GetDC(HWND::default());
+            let screen = GetDC(None);
             if screen.is_invalid() {
                 return Err(last_error("GetDC"));
             }
-            let mem = CreateCompatibleDC(screen);
+            let mem = CreateCompatibleDC(Some(screen));
             let bmp = CreateCompatibleBitmap(screen, width, height);
             if mem.is_invalid() || bmp.is_invalid() {
                 if !bmp.is_invalid() {
-                    let _ = DeleteObject(bmp);
+                    let _ = DeleteObject(bmp.into());
                 }
                 if !mem.is_invalid() {
                     let _ = DeleteDC(mem);
                 }
-                ReleaseDC(HWND::default(), screen);
+                ReleaseDC(None, screen);
                 return Err(Error::Win("could not allocate a capture bitmap".into()));
             }
             Ok(Canvas { screen, mem, bmp, width, height })
@@ -143,7 +143,7 @@ impl Canvas {
     /// Run `draw` with the bitmap selected into the memory DC, then read the pixels.
     fn draw(&self, draw: impl FnOnce(HDC) -> Result<()>) -> Result<Raw> {
         unsafe {
-            let old = SelectObject(self.mem, self.bmp);
+            let old = SelectObject(self.mem, self.bmp.into());
             let res = draw(self.mem);
             SelectObject(self.mem, old);
             res?;
@@ -181,9 +181,9 @@ impl Canvas {
 impl Drop for Canvas {
     fn drop(&mut self) {
         unsafe {
-            let _ = DeleteObject(self.bmp);
+            let _ = DeleteObject(self.bmp.into());
             let _ = DeleteDC(self.mem);
-            ReleaseDC(HWND::default(), self.screen);
+            ReleaseDC(None, self.screen);
         }
     }
 }
@@ -192,7 +192,7 @@ fn grab_screen(x: i32, y: i32, w: i32, h: i32) -> Result<Raw> {
     let canvas = Canvas::new(w, h)?;
     let screen = canvas.screen;
     canvas.draw(|mem| unsafe {
-        BitBlt(mem, 0, 0, w, h, screen, x, y, SRCCOPY | CAPTUREBLT).map_err(|e| win_err("BitBlt", e))
+        BitBlt(mem, 0, 0, w, h, Some(screen), x, y, SRCCOPY | CAPTUREBLT).map_err(|e| win_err("BitBlt", e))
     })
 }
 

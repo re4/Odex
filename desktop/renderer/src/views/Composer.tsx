@@ -60,7 +60,7 @@ async function threadContext(id: string): Promise<string> {
   const lines: string[] = [`Context from the thread "${name}" (cwd ${r.thread.cwd}):`]
   const msgs: string[] = []
   for (const t of r.turns)
-    for (const i of t.items) {
+    for (const i of t.items ?? []) {
       if (i.type === 'userMessage') msgs.push(`User: ${i.content.map((c) => (c.type === 'text' ? c.text : '')).join(' ')}`)
       if (i.type === 'agentMessage' && i.text.trim()) msgs.push(`Assistant: ${i.text}`)
     }

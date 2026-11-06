@@ -34,11 +34,14 @@ export interface Attachment {
   kind?: 'folder' | 'thread' | 'computer' | 'mcpResource'
 }
 
+/** A turn as the store holds it: `items` is always set (the wire omits it when empty). */
+export type ThreadTurn = Turn & { items: ThreadItem[] }
+
 export interface ThreadState {
   thread: Thread
   loaded: boolean
   loading: boolean
-  turns: Turn[]
+  turns: ThreadTurn[]
   context?: ContextStatus
   plan: PlanStep[]
   planExplanation?: string | null
@@ -202,7 +205,7 @@ function emptyThreadState(thread: Thread): ThreadState {
   }
 }
 
-function upsertItem(turns: Turn[], turnId: string, item: ThreadItem, threadId: string): Turn[] {
+function upsertItem(turns: ThreadTurn[], turnId: string, item: ThreadItem, threadId: string): ThreadTurn[] {
   let found = false
   const next = turns.map((t) => {
     if (t.id !== turnId) return t
@@ -335,7 +338,7 @@ export const useApp = create<AppState>((set, get) => ({
             thread: r.thread,
             loaded: true,
             loading: false,
-            turns: r.turns,
+            turns: r.turns.map((t) => ({ ...t, items: t.items ?? [] })),
             context: r.context ?? undefined,
             plan: r.plan,
             sources: r.sources,

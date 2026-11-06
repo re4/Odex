@@ -2,6 +2,7 @@
 //! all normalized to a cron expression that `croner` evaluates.
 
 use chrono::{DateTime, Local, TimeZone, Timelike, Utc};
+use croner::parser::{CronParser, Seconds, Year};
 use croner::Cron;
 use odex_protocol::ScheduleValidateResponse;
 
@@ -91,9 +92,13 @@ pub fn parse_schedule(s: &str) -> Result<Schedule, String> {
         return Err("schedule is empty".to_string());
     }
     let cron = normalize(source)?;
-    let parsed = Cron::new(&cron)
-        .with_seconds_optional()
-        .parse()
+    // 5 or 6 fields, no year; `sloppy_ranges` keeps `5/15` steps that croner < 4 accepted.
+    let parsed = CronParser::builder()
+        .seconds(Seconds::Optional)
+        .year(Year::Disallowed)
+        .sloppy_ranges(true)
+        .build()
+        .parse(&cron)
         .map_err(|e| format!("invalid cron expression `{cron}`: {e}"))?;
     // Reject expressions that can never fire (e.g. February 30th).
     if parsed.find_next_occurrence(&Utc::now(), false).is_err() {

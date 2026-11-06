@@ -6,4 +6,4 @@ export type InitializeParams = { clientInfo: ClientInfo, capabilities: ClientCap
 /**
  * Decrypted secrets (API keys, tokens) held only in memory by the engine.
  */
-secrets: { [key in string]?: string }, };
+secrets: { [key in string]: string }, };

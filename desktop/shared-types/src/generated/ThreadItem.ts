@@ -3,11 +3,11 @@ import type { CompactionTrigger } from "./CompactionTrigger";
 import type { DiffStats } from "./DiffStats";
 import type { FileChange } from "./FileChange";
 import type { ItemStatus } from "./ItemStatus";
-import type { JsonValue } from "./serde_json/JsonValue";
 import type { NoticeLevel } from "./NoticeLevel";
 import type { PlanStep } from "./PlanStep";
 import type { ReviewFinding } from "./ReviewFinding";
 import type { UserInput } from "./UserInput";
+import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
  * One entry in the conversation, as rendered by the UI.

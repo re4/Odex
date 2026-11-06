@@ -7,4 +7,4 @@ export type PluginManifest = { name: string, version?: string | null, descriptio
 /**
  * Relative paths of skill folders.
  */
-skills: Array<string>, mcpServers: { [key in string]?: McpServerToml }, hooks?: HooksToml | null, actions: Array<ProjectAction>, };
+skills: Array<string>, mcpServers: { [key in string]: McpServerToml }, hooks?: HooksToml | null, actions: Array<ProjectAction>, };
