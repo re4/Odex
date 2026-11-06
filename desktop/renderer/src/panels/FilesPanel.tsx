@@ -36,8 +36,8 @@ import {
   TextWrap,
   X,
 } from 'lucide-react'
-import type { GitFileStatus, Turn } from '@shared/index'
-import { isRunning, useApp } from '@/store/app'
+import type { GitFileStatus } from '@shared/index'
+import { isRunning, useApp, type ThreadTurn } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import { confirmDialog, copy } from '@/lib/actions'
 import { Menu, ResizeHandle, basename, type MenuItem } from '@/components/ui'
@@ -1990,7 +1990,7 @@ function applyDiff(marks: Map<number, string>, diff: string, label: string): Map
 }
 
 /** Gutter annotations for the lines the agent edited in `path`, oldest edit first. */
-export function agentEditAnnotations(turns: Turn[], cwd: string, path: string): LineAnnotation[] {
+export function agentEditAnnotations(turns: ThreadTurn[], cwd: string, path: string): LineAnnotation[] {
   const target = k(path)
   let marks = new Map<number, string>()
   turns.forEach((turn, ti) => {

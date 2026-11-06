@@ -16,7 +16,7 @@ api_key?: string | null,
 /**
  * Environment variable holding the API key.
  */
-api_key_env?: string | null, headers: { [key in string]?: string }, query_params: { [key in string]?: string }, wire_api?: WireApi | null, 
+api_key_env?: string | null, headers: { [key in string]: string }, query_params: { [key in string]: string }, wire_api?: WireApi | null, 
 /**
  * Concurrent requests allowed against this endpoint (vLLM batches them).
  */

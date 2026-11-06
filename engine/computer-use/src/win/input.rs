@@ -202,7 +202,7 @@ pub fn post_click(hwnd: isize, x: i32, y: i32, button: MouseButton, double: bool
         MouseButton::Middle => (WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MBUTTONDBLCLK, 0x0010),
     };
     let post = |msg: u32, wp: usize| {
-        unsafe { PostMessageW(target, msg, WPARAM(wp), lp) }.map_err(|e| win_err("PostMessage", e))
+        unsafe { PostMessageW(Some(target), msg, WPARAM(wp), lp) }.map_err(|e| win_err("PostMessage", e))
     };
     post(WM_MOUSEMOVE, 0)?;
     post(down, mk)?;

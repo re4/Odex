@@ -11,9 +11,9 @@ use crate::workspace::*;
 /// Describes one method for codegen.
 pub struct MethodDesc {
     pub method: &'static str,
-    pub params: fn() -> String,
-    pub result: Option<fn() -> String>,
-    pub export: fn(&std::path::Path) -> Result<(), ts_rs::ExportError>,
+    pub params: fn(&ts_rs::Config) -> String,
+    pub result: Option<fn(&ts_rs::Config) -> String>,
+    pub export: fn(&ts_rs::Config) -> Result<(), ts_rs::ExportError>,
 }
 
 macro_rules! requests {
@@ -26,9 +26,9 @@ macro_rules! requests {
                 method: $method,
                 params: <$params as ts_rs::TS>::name,
                 result: Some(<$result as ts_rs::TS>::name),
-                export: |dir| {
-                    <$params as ts_rs::TS>::export_all_to(dir)?;
-                    <$result as ts_rs::TS>::export_all_to(dir)
+                export: |cfg| {
+                    <$params as ts_rs::TS>::export_all(cfg)?;
+                    <$result as ts_rs::TS>::export_all(cfg)
                 },
             }, )*
         ];
@@ -45,7 +45,7 @@ macro_rules! notifications {
                 method: $method,
                 params: <$params as ts_rs::TS>::name,
                 result: None,
-                export: |dir| <$params as ts_rs::TS>::export_all_to(dir),
+                export: |cfg| <$params as ts_rs::TS>::export_all(cfg),
             }, )*
         ];
     };

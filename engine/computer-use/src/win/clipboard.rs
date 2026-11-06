@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND};
+use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
 };
@@ -20,7 +20,7 @@ impl Open {
     fn new() -> Result<Self> {
         // Another app may hold the clipboard briefly; retry for ~0.5 s.
         for _ in 0..20 {
-            if unsafe { OpenClipboard(HWND::default()) }.is_ok() {
+            if unsafe { OpenClipboard(None) }.is_ok() {
                 return Ok(Open);
             }
             std::thread::sleep(Duration::from_millis(25));
@@ -71,14 +71,14 @@ pub fn clipboard_set(text: &str) -> Result<()> {
         let mem = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2).map_err(|e| win_err("GlobalAlloc", e))?;
         let ptr = GlobalLock(mem) as *mut u16;
         if ptr.is_null() {
-            let _ = GlobalFree(mem);
+            let _ = GlobalFree(Some(mem));
             return Err(Error::Win("GlobalLock failed".into()));
         }
         std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
         let _ = GlobalUnlock(mem);
         // On success the system owns the memory.
-        if let Err(e) = SetClipboardData(CF_UNICODETEXT, HANDLE(mem.0)) {
-            let _ = GlobalFree(mem);
+        if let Err(e) = SetClipboardData(CF_UNICODETEXT, Some(HANDLE(mem.0))) {
+            let _ = GlobalFree(Some(mem));
             return Err(win_err("SetClipboardData", e));
         }
     }

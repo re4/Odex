@@ -25,8 +25,8 @@ import {
   WrapText,
   X,
 } from 'lucide-react'
-import type { DiffFile, DiffHunk, DiffTarget, GitBranch as Branch, GitCommitInfo, GitStatus, RepoDiff, ReviewComment, ReviewFinding, Turn } from '@shared/index'
-import { useApp } from '@/store/app'
+import type { DiffFile, DiffHunk, DiffTarget, GitBranch as Branch, GitCommitInfo, GitStatus, RepoDiff, ReviewComment, ReviewFinding } from '@shared/index'
+import { useApp, type ThreadTurn } from '@/store/app'
 import { call, toast } from '@/lib/rpc'
 import { confirmDialog, sendMessage } from '@/lib/actions'
 import { Menu, basename, useMenu, type MenuItem } from '@/components/ui'
@@ -105,7 +105,7 @@ function snippetFor(f: DiffFile, side: 'old' | 'new', start: number, end: number
   return out.slice(0, 40).join('\n')
 }
 
-function latestReview(turns: Turn[] | undefined): { id: string; summary: string; findings: ReviewFinding[]; overallCorrectness?: string | null } | null {
+function latestReview(turns: ThreadTurn[] | undefined): { id: string; summary: string; findings: ReviewFinding[]; overallCorrectness?: string | null } | null {
   if (!turns) return null
   for (let t = turns.length - 1; t >= 0; t--) {
     const items = turns[t].items

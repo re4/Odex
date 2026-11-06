@@ -8,7 +8,8 @@ import { odexHome } from './paths'
 import { getSettings, onSettings } from './settings'
 import { setQuitting } from './windows'
 
-const require = createRequire(import.meta.url)
+// Not named `require`: electron-vite's ESM shim declares that at the top of the bundle.
+const requireCjs = createRequire(import.meta.url)
 
 // Updates come from the GitHub releases page. Keep in sync with `publish` in electron-builder.yml, which
 // writes resources/app-update.yml for electron-updater and the latest*.yml files each release must carry.
@@ -93,7 +94,7 @@ export function initUpdater(onDownloaded: (s: UpdateState) => void): void {
     state = { ...state, status: 'unsupported', reason: 'Windows updates the MSIX package (Microsoft Store or App Installer).' }
     return
   }
-  const { autoUpdater } = require('electron-updater') as typeof import('electron-updater')
+  const { autoUpdater } = requireCjs('electron-updater') as typeof import('electron-updater')
   const u = autoUpdater
   u.logger = fileLogger()
   if (feed) {

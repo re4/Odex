@@ -12,18 +12,19 @@ pub fn generate_ts(out_dir: &Path) -> anyhow_lite::Result<()> {
         std::fs::remove_dir_all(out_dir)?;
     }
     std::fs::create_dir_all(out_dir)?;
+    let cfg = ts_rs::Config::new().with_out_dir(out_dir);
 
     for m in CLIENT_REQUESTS.iter().chain(SERVER_NOTIFICATIONS).chain(SERVER_REQUESTS) {
-        (m.export)(out_dir).map_err(|e| anyhow_lite::Error(format!("{}: {e}", m.method)))?;
+        (m.export)(&cfg).map_err(|e| anyhow_lite::Error(format!("{}: {e}", m.method)))?;
     }
     // Types not reachable from a method but used by the UI.
     use ts_rs::TS;
-    crate::config_types::ConfigToml::export_all_to(out_dir).map_err(err)?;
-    crate::jsonrpc::JsonRpcRequest::export_all_to(out_dir).map_err(err)?;
-    crate::jsonrpc::JsonRpcResponse::export_all_to(out_dir).map_err(err)?;
-    crate::jsonrpc::JsonRpcNotification::export_all_to(out_dir).map_err(err)?;
-    crate::items::ItemDelta::export_all_to(out_dir).map_err(err)?;
-    crate::common::ModelRole::export_all_to(out_dir).map_err(err)?;
+    crate::config_types::ConfigToml::export_all(&cfg).map_err(err)?;
+    crate::jsonrpc::JsonRpcRequest::export_all(&cfg).map_err(err)?;
+    crate::jsonrpc::JsonRpcResponse::export_all(&cfg).map_err(err)?;
+    crate::jsonrpc::JsonRpcNotification::export_all(&cfg).map_err(err)?;
+    crate::items::ItemDelta::export_all(&cfg).map_err(err)?;
+    crate::common::ModelRole::export_all(&cfg).map_err(err)?;
 
     // Post-process: nullable fields become optional (`x?: T | null`), matching
     // serde's tolerance for missing Option fields.
@@ -61,9 +62,9 @@ pub fn generate_ts(out_dir: &Path) -> anyhow_lite::Result<()> {
         }
     };
     for m in CLIENT_REQUESTS.iter().chain(SERVER_NOTIFICATIONS).chain(SERVER_REQUESTS) {
-        collect((m.params)());
+        collect((m.params)(&cfg));
         if let Some(r) = m.result {
-            collect(r());
+            collect(r(&cfg));
         }
     }
     imports.sort();
@@ -72,9 +73,9 @@ pub fn generate_ts(out_dir: &Path) -> anyhow_lite::Result<()> {
         let _ = writeln!(out, "import type {{ {t} }} from \"./{path}\";");
     }
     let _ = writeln!(out, "\nexport const PROTOCOL_VERSION = \"{}\";\n", crate::PROTOCOL_VERSION);
-    write_request_map(&mut out, "ClientRequestMap", CLIENT_REQUESTS);
-    write_notification_map(&mut out, "ServerNotificationMap", SERVER_NOTIFICATIONS);
-    write_request_map(&mut out, "ServerRequestMap", SERVER_REQUESTS);
+    write_request_map(&mut out, &cfg, "ClientRequestMap", CLIENT_REQUESTS);
+    write_notification_map(&mut out, &cfg, "ServerNotificationMap", SERVER_NOTIFICATIONS);
+    write_request_map(&mut out, &cfg, "ServerRequestMap", SERVER_REQUESTS);
     out.push_str("export type ClientMethod = keyof ClientRequestMap;\n");
     out.push_str("export type ServerNotificationMethod = keyof ServerNotificationMap;\n");
     out.push_str("export type ServerRequestMethod = keyof ServerRequestMap;\n");
@@ -88,24 +89,24 @@ fn err(e: ts_rs::ExportError) -> anyhow_lite::Error {
     anyhow_lite::Error(e.to_string())
 }
 
-fn write_request_map(out: &mut String, name: &str, table: &[MethodDesc]) {
+fn write_request_map(out: &mut String, cfg: &ts_rs::Config, name: &str, table: &[MethodDesc]) {
     let _ = writeln!(out, "export interface {name} {{");
     for m in table {
         let _ = writeln!(
             out,
             "  \"{}\": {{ params: {}; result: {} }};",
             m.method,
-            (m.params)(),
-            m.result.map(|r| r()).unwrap_or_else(|| "void".into())
+            (m.params)(cfg),
+            m.result.map(|r| r(cfg)).unwrap_or_else(|| "void".into())
         );
     }
     out.push_str("}\n\n");
 }
 
-fn write_notification_map(out: &mut String, name: &str, table: &[MethodDesc]) {
+fn write_notification_map(out: &mut String, cfg: &ts_rs::Config, name: &str, table: &[MethodDesc]) {
     let _ = writeln!(out, "export interface {name} {{");
     for m in table {
-        let _ = writeln!(out, "  \"{}\": {};", m.method, (m.params)());
+        let _ = writeln!(out, "  \"{}\": {};", m.method, (m.params)(cfg));
     }
     out.push_str("}\n\n");
 }

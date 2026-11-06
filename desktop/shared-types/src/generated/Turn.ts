@@ -9,4 +9,4 @@ export type Turn = { id: string, threadId: string, status: TurnStatus, mode: Tur
 /**
  * Present when a turn is returned as part of thread history.
  */
-items: Array<ThreadItem>, };
+items?: Array<ThreadItem>, };

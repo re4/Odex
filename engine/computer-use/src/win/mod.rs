@@ -33,7 +33,7 @@ pub(crate) fn win_err(context: &str, e: windows::core::Error) -> Error {
 }
 
 pub(crate) fn last_error(context: &str) -> Error {
-    win_err(context, windows::core::Error::from_win32())
+    win_err(context, windows::core::Error::from_thread())
 }
 
 pub(crate) fn to_hwnd(h: isize) -> HWND {

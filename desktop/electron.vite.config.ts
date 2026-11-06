@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
 const shared = resolve(__dirname, 'shared-types/src')
@@ -7,13 +7,12 @@ const shared = resolve(__dirname, 'shared-types/src')
 const out = process.env.ODEX_OUT || 'out'
 
 export default defineConfig({
+  // main and preload externalize dependencies by default (`build.externalizeDeps`)
   main: {
-    plugins: [externalizeDepsPlugin()],
     resolve: { alias: { '@shared': shared } },
     build: { outDir: `${out}/main`, lib: { entry: resolve(__dirname, 'main/index.ts') } },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
     resolve: { alias: { '@shared': shared } },
     build: {
       outDir: `${out}/preload`,

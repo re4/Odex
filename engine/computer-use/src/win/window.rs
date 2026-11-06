@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use std::sync::Once;
 use std::time::{Duration, Instant};
 
-use windows::core::{w, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, RECT, TRUE, WPARAM};
+use windows::core::{w, BOOL, HSTRING, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
@@ -64,7 +64,7 @@ pub(crate) fn top_level_windows() -> Vec<HWND> {
 fn child_windows(parent: HWND) -> Vec<HWND> {
     let mut v: Vec<HWND> = Vec::new();
     unsafe {
-        let _ = EnumChildWindows(parent, Some(collect_hwnd), LPARAM(&mut v as *mut Vec<HWND> as isize));
+        let _ = EnumChildWindows(Some(parent), Some(collect_hwnd), LPARAM(&mut v as *mut Vec<HWND> as isize));
     }
     v
 }
@@ -150,7 +150,7 @@ pub(crate) fn window_rect(h: HWND) -> RECT {
 
 pub(crate) fn require_window(hwnd: isize) -> Result<HWND> {
     let h = to_hwnd(hwnd);
-    if hwnd == 0 || !unsafe { IsWindow(h) }.as_bool() {
+    if hwnd == 0 || !unsafe { IsWindow(Some(h)) }.as_bool() {
         return Err(Error::NotFound(format!("window {hwnd} does not exist (list windows again)")));
     }
     Ok(h)
@@ -238,12 +238,8 @@ pub fn monitors() -> Result<Vec<MonitorInfo>> {
     init_dpi_awareness();
     let mut handles: Vec<HMONITOR> = Vec::new();
     unsafe {
-        let _ = EnumDisplayMonitors(
-            HDC::default(),
-            None,
-            Some(collect_monitor),
-            LPARAM(&mut handles as *mut Vec<HMONITOR> as isize),
-        );
+        let _ =
+            EnumDisplayMonitors(None, None, Some(collect_monitor), LPARAM(&mut handles as *mut Vec<HMONITOR> as isize));
     }
     let mut out = Vec::new();
     for m in handles {
@@ -398,10 +394,8 @@ pub fn window_op(hwnd: isize, op: WindowOp) -> Result<()> {
         WindowOp::Move { x, y } => {
             restore_for_geometry(h);
             let (dl, dt, _, _) = frame_insets(h);
-            unsafe {
-                SetWindowPos(h, HWND::default(), x - dl, y - dt, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
-            }
-            .map_err(|e| win_err("SetWindowPos", e))
+            unsafe { SetWindowPos(h, None, x - dl, y - dt, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) }
+                .map_err(|e| win_err("SetWindowPos", e))
         }
         WindowOp::Resize { width, height } => {
             if width <= 0 || height <= 0 {
@@ -412,7 +406,7 @@ pub fn window_op(hwnd: isize, op: WindowOp) -> Result<()> {
             unsafe {
                 SetWindowPos(
                     h,
-                    HWND::default(),
+                    None,
                     0,
                     0,
                     width + dl + dr,
@@ -441,7 +435,7 @@ pub fn window_op(hwnd: isize, op: WindowOp) -> Result<()> {
             Ok(())
         }
         WindowOp::Close => {
-            unsafe { PostMessageW(h, WM_CLOSE, WPARAM(0), LPARAM(0)) }.map_err(|e| win_err("WM_CLOSE", e))
+            unsafe { PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0)) }.map_err(|e| win_err("WM_CLOSE", e))
         }
     }
 }

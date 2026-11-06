@@ -59,16 +59,16 @@ review_instructions?: string | null,
 /**
  * `[git]`: branch prefix, force push, commit / PR prompt additions.
  */
-git?: GitToml | null, roles: { [key in string]?: string }, model_providers: { [key in string]?: ModelProviderToml }, models: { [key in string]?: ModelToml }, 
+git?: GitToml | null, roles: { [key in string]: string }, model_providers: { [key in string]: ModelProviderToml }, models: { [key in string]: ModelToml }, 
 /**
  * Discovered models left out of the model list, as `<provider>:<model id>`.
  */
-hidden_models: Array<string>, context?: ContextToml | null, sandbox?: SandboxToml | null, mcp_servers: { [key in string]?: McpServerToml }, mcp?: McpToml | null, hooks?: HooksToml | null, computer_use?: ComputerUseToml | null, browser?: BrowserToml | null, 
+hidden_models: Array<string>, context?: ContextToml | null, sandbox?: SandboxToml | null, mcp_servers: { [key in string]: McpServerToml }, mcp?: McpToml | null, hooks?: HooksToml | null, computer_use?: ComputerUseToml | null, browser?: BrowserToml | null, 
 /**
  * `[comfyui]`: image and 3D generation through a ComfyUI server.
  */
-comfyui?: ComfyUiToml | null, memories?: MemoriesToml | null, notifications?: NotificationsToml | null, automatic_review?: AutomaticReviewToml | null, skills?: SkillsToml | null, features?: FeaturesToml | null, profiles: { [key in string]?: ProfileToml }, 
+comfyui?: ComfyUiToml | null, memories?: MemoriesToml | null, notifications?: NotificationsToml | null, automatic_review?: AutomaticReviewToml | null, skills?: SkillsToml | null, features?: FeaturesToml | null, profiles: { [key in string]: ProfileToml }, 
 /**
  * Per-folder trust: `[projects."C:\\code\\app"] trust_level = "trusted"`.
  */
-projects: { [key in string]?: ProjectTrustToml }, };
+projects: { [key in string]: ProjectTrustToml }, };

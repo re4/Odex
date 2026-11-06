@@ -27,7 +27,7 @@ api_key_header?: string | null,
 /**
  * Extra headers sent with every request.
  */
-headers: { [key in string]?: string }, 
+headers: { [key in string]: string }, 
 /**
  * Comfy.org API key for partner (API) nodes such as Ideogram, sent with each run as
  * `extra_data.api_key_comfy_org`. Prefer `comfy_org_api_key_env` or the desktop's encrypted store.

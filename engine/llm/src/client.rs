@@ -5,7 +5,6 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use rand::Rng;
 use serde_json::{json, Map, Value};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -437,7 +436,7 @@ pub fn backoff(attempt: u32, retry_after: Option<Duration>) -> Duration {
     }
     let base = 400u64 * 2u64.saturating_pow(attempt.saturating_sub(1).min(8));
     let cap = base.min(20_000);
-    let jitter = rand::thread_rng().gen_range(cap / 2..=cap);
+    let jitter = rand::random_range(cap / 2..=cap);
     Duration::from_millis(jitter)
 }
 

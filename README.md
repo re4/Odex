@@ -87,7 +87,7 @@ cargo build --release -p odex-engine
 
 ### 3. Run the desktop app
 
-You need Node.js 20.19 or later (24 LTS recommended).
+You need Node.js 22.13 or later (24 LTS recommended).
 
 ```bash
 cd desktop
